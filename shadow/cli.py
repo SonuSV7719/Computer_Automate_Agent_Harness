@@ -2,7 +2,8 @@
 
 Only the standard library is imported here so each call starts in milliseconds.
 
-Exit codes: 0 ok, 1 error, 2 expected result not seen, 3 stale snapshot.
+Exit codes: 0 ok, 1 error, 2 expected result not seen, 3 stale snapshot,
+4 run paused for a heal decision, 5 run needs a person.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from pathlib import Path
 PORT = int(os.environ.get("SHADOW_PORT", "47600"))
 BASE = f"http://127.0.0.1:{PORT}"
 HOME = Path(os.environ.get("SHADOW_HOME", Path.home() / ".shadow"))
-EXIT = {"expect": 2, "stale": 3}
+EXIT = {"expect": 2, "stale": 3, "needs_heal": 4, "needs_human": 5}
 
 
 def _request(path: str, body: dict | None = None, timeout: float = 60.0) -> dict:
@@ -88,6 +89,40 @@ def _act_text(reply: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _run_text(reply: dict) -> str | None:
+    if "status" not in reply:
+        return None
+    lines = [f"run {reply['run']} | {reply['skill']} v{reply['version']} | {reply['status']}"]
+    if reply.get("ms") is not None:
+        lines[0] += (f" | {reply['ms']} ms | {reply.get('steps_done', 0)} steps"
+                     f" | {reply.get('llm_calls', 0)} LLM calls | {len(reply.get('heals') or [])} heals")
+    for step in reply.get("steps") or []:
+        lines.append(f"  step {step['step'] + 1}: {step['action']} {step.get('el') or ''} "
+                     f"via {step.get('route')} found by {step.get('locator')} in {step['ms']} ms"
+                     + (" (healed)" if step.get("healed") else ""))
+    for patch in reply.get("patches") or []:
+        lines.append(f"  healed step {patch['step'] + 1}: {patch.get('before')} -> {patch.get('after')}"
+                     f" ({patch.get('reason') or 'no reason given'})")
+    if reply.get("new_version"):
+        lines.append(f"  saved as version {reply['new_version']}")
+    packet = reply.get("packet")
+    if reply["status"] == "needs_heal" and packet:
+        run = reply["run"]
+        lines += [
+            "", f"STEP {packet['step'] + 1} FAILED ({packet['failure']}): {packet['detail']}",
+            f"intent: {packet['intent'] or '(none recorded)'}",
+            f"action: {packet['action']}" + (f" {packet['value']!r}" if packet.get("value") else "")
+            + (f" | expect: {packet['expect']}" if packet.get("expect") else ""),
+            "was: " + (json.dumps(packet["fingerprint"], ensure_ascii=False) if packet.get("fingerprint") else "-"),
+            "", "CURRENT SCREEN:", packet["screen"], "",
+            "Answer with one of:",
+            f"  shadow heal {run} --index N --reason WHY       (the element to use instead)",
+            f"  shadow heal {run} --expect text:... --reason WHY  (the result wording changed)",
+            f"  shadow heal {run} --escalate WHY               (a person must decide)",
+        ]
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -123,8 +158,30 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--timeout", type=float, default=3.0)
         p.add_argument("--intent", default="", help="what this step is for, in plain words")
 
-    r = sub.add_parser("record", help="record actions into a trace")
-    r.add_argument("op", choices=["start", "stop", "show"])
+    r = sub.add_parser("record", help="record actions, then save them as a skill")
+    r.add_argument("op", choices=["start", "stop", "show", "save"])
+    r.add_argument("name", nargs="?", help="skill name (for save)")
+    r.add_argument("--desc", default="", help="what the skill does")
+
+    sk = sub.add_parser("skills", help="list, show, compare and roll back skills")
+    sk.add_argument("op", choices=["list", "show", "code", "rollback", "diff"])
+    sk.add_argument("name", nargs="?")
+    sk.add_argument("versions", nargs="*", type=int)
+
+    rn = sub.add_parser("run", help="replay a skill with no LLM")
+    rn.add_argument("skill")
+    rn.add_argument("-p", "--param", action="append", default=[], metavar="NAME=VALUE")
+    rn.add_argument("--heal", choices=["auto", "host", "off"], default="auto",
+                    help="auto: Gemini heals if configured, else pause for you; host: always pause; off: fail")
+
+    hl = sub.add_parser("heal", help="answer a paused run")
+    hl.add_argument("run")
+    hl.add_argument("--index", type=int, help="element to use instead")
+    hl.add_argument("--expect", help="corrected post-condition")
+    hl.add_argument("--escalate", help="hand the run to a person, with this reason")
+    hl.add_argument("--reason", default="")
+
+    sub.add_parser("runs", help="recent runs with timing and LLM calls")
 
     args = parser.parse_args(argv)
     as_json = args.json
@@ -165,8 +222,65 @@ def main(argv: list[str] | None = None) -> int:
         return _finish(reply, as_json, _act_text(reply) or "")
 
     if args.cmd == "record":
+        if args.op == "save":
+            if not args.name:
+                parser.error("record save needs a skill name")
+            reply = call("/skills/compile", {"name": args.name, "description": args.desc})
+            text = (f"saved skill '{reply['skill']}' v{reply['version']} with {reply['steps']} steps\n\n"
+                    f"{reply['code']}") if reply.get("ok") else ""
+            return _finish(reply, as_json, text)
         reply = call("/record", {"cmd": args.op})
         return _finish(reply, True)
+
+    if args.cmd == "skills":
+        if args.op == "list":
+            reply = call("/skills/list")
+            text = "\n".join(f"{k['name']:<28} v{k['version']}  {k['steps']} steps  {k['heals']} heals  "
+                             f"params: {', '.join(k['params']) or '-'}" for k in reply.get("skills", []))
+            return _finish(reply, as_json, text or "(no skills yet)")
+        if not args.name:
+            parser.error(f"skills {args.op} needs a skill name")
+        if args.op in ("show", "code"):
+            reply = call("/skills/show", {"name": args.name, "version": (args.versions or [None])[0]})
+            return _finish(reply, as_json or args.op == "show", reply.get("code", ""))
+        if args.op == "rollback":
+            if len(args.versions) != 1:
+                parser.error("skills rollback needs a version number")
+            reply = call("/skills/rollback", {"name": args.name, "version": args.versions[0]})
+            return _finish(reply, as_json, f"{args.name} is now at version {reply.get('version')}")
+        if len(args.versions) != 2:
+            parser.error("skills diff needs two version numbers")
+        reply = call("/skills/diff", {"name": args.name, "old": args.versions[0], "new": args.versions[1]})
+        return _finish(reply, as_json, reply.get("diff") or "(no difference)")
+
+    if args.cmd == "run":
+        params = {}
+        for item in args.param:
+            key, sep, value = item.partition("=")
+            if not sep:
+                parser.error(f"--param needs NAME=VALUE, got '{item}'")
+            params[key] = value
+        reply = call("/run", {"skill": args.skill, "params": params, "heal": args.heal})
+        return _finish(reply, as_json, _run_text(reply) or "")
+
+    if args.cmd == "heal":
+        if args.index is not None:
+            decision = {"decision": "retarget", "index": args.index}
+        elif args.expect:
+            decision = {"decision": "update_expect", "expect": args.expect}
+        elif args.escalate:
+            decision = {"decision": "escalate"}
+        else:
+            parser.error("heal needs --index, --expect or --escalate")
+        decision["reason"] = args.escalate or args.reason
+        reply = call("/heal", {"run": args.run, "decision": decision})
+        return _finish(reply, as_json, _run_text(reply) or "")
+
+    if args.cmd == "runs":
+        reply = call("/runs", {})
+        text = "\n".join(f"{r['run']}  {r['skill']:<24} v{r['version']}  {r['status']:<12} {r['ms']:>8} ms  "
+                         f"{r['llm_calls']} LLM calls  {r['heals']} heals" for r in reply.get("runs", []))
+        return _finish(reply, as_json, text or "(no runs yet)")
 
     return 1
 

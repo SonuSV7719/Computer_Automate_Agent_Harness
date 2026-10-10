@@ -112,6 +112,92 @@ def record(cmd: str = Body(..., embed=True)) -> dict:
     return run(fn)
 
 
+def _store():
+    from .core.skill import SkillStore
+    return SkillStore(HOME / "skills")
+
+
+@app.post("/skills/compile")
+def skills_compile(name: str = Body(...), description: str = Body("")) -> dict:
+    """Stop recording and save the trace as a skill."""
+    from .core.skill import compile_trace, render_code
+
+    def fn(e):
+        trace = e.record_stop()
+        if not trace:
+            raise ValueError("nothing was recorded; run `shadow record start` and perform the task first")
+        skill = compile_trace(trace, name, description)
+        _store().save(skill)
+        return {"skill": skill.name, "version": skill.version, "params": skill.params,
+                "steps": len(skill.steps), "code": render_code(skill)}
+    return run(fn)
+
+
+@app.post("/skills/list")
+def skills_list() -> dict:
+    return {"ok": True, "skills": _store().list()}
+
+
+@app.post("/skills/show")
+def skills_show(name: str = Body(...), version: Optional[int] = Body(None)) -> dict:
+    try:
+        store = _store()
+        skill = store.load(name, version)
+        return {"ok": True, "skill": skill.to_dict(), "code": store.code(name, skill.version),
+                "versions": store.versions(name), "current": store.current(name)}
+    except LookupError as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+
+
+@app.post("/skills/rollback")
+def skills_rollback(name: str = Body(...), version: int = Body(...)) -> dict:
+    try:
+        skill = _store().rollback(name, version)
+        return {"ok": True, "skill": skill.name, "version": skill.version}
+    except LookupError as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+
+
+@app.post("/skills/diff")
+def skills_diff(name: str = Body(...), old: int = Body(...), new: int = Body(...)) -> dict:
+    try:
+        return {"ok": True, "diff": _store().diff(name, old, new)}
+    except (LookupError, OSError) as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+
+
+@app.post("/run")
+def run_start(skill: str = Body(...), params: dict = Body(default_factory=dict),
+              heal: str = Body("auto"), wait: float = Body(120.0)) -> dict:
+    from .runs import MANAGER
+    try:
+        state = MANAGER.start(_store(), skill, params, heal, lambda fn: _worker.submit(lambda: fn(_get_engine())).result())
+    except (LookupError, ValueError) as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+    return state.wait(wait)
+
+
+@app.post("/heal")
+def run_heal(run_id: str = Body(..., alias="run"), decision: dict = Body(...), wait: float = Body(120.0)) -> dict:
+    from .runs import MANAGER
+    try:
+        state = MANAGER.answer(run_id, decision)
+    except LookupError as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+    return state.wait(wait)
+
+
+@app.post("/runs")
+def runs_list(run_id: Optional[str] = Body(None, alias="run", embed=True)) -> dict:
+    from .runs import MANAGER
+    if run_id:
+        try:
+            return MANAGER.get(run_id).summary()
+        except LookupError as exc:
+            return {"ok": False, "kind": "invalid", "error": str(exc)}
+    return {"ok": True, "runs": MANAGER.recent(HOME / "runs")}
+
+
 @app.post("/shutdown")
 def shutdown() -> dict:
     if _server is not None:

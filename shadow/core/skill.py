@@ -208,8 +208,16 @@ class SkillStore:
         return skill
 
     def diff(self, name: str, old: int, new: int) -> str:
+        """Code changes plus the locator and expectation changes made by heals."""
         a, b = self.code(name, old).splitlines(), self.code(name, new).splitlines()
-        return "\n".join(difflib.unified_diff(a, b, f"v{old}/skill.py", f"v{new}/skill.py", lineterm=""))
+        lines = list(difflib.unified_diff(a, b, f"v{old}/skill.py", f"v{new}/skill.py", lineterm=""))
+        low, high = sorted((old, new))
+        for entry in self.load(name, high).history:
+            if low < entry["version"] <= high:
+                what = f"element {entry['el']}" if entry["kind"] == "retarget" else "expected result"
+                lines.append(f"v{entry['version']} step {entry['step'] + 1} {what}: {entry['before']} -> "
+                             f"{entry['after']}" + (f"  ({entry['reason']})" if entry.get("reason") else ""))
+        return "\n".join(lines)
 
 
 def apply_patches(skill: Skill, patches: list[dict]) -> Skill:
