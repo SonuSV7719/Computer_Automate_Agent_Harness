@@ -9,3 +9,4 @@ dist/
 *.log
 node_modules/
 .livetest/
+.livetest-brain.log

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">Shadow <span>teach once · replay as code · heal on change</span></div>
+  <div class="bar">
+    <span id="online" class="dot" title="device status"></span>
+    <select id="device" aria-label="Device"></select>
+    <button id="pair-btn" class="ghost">Pair a PC</button>
+  </div>
+</header>
+
+<div id="pair-box" class="notice hidden">
+  <div>On the PC, run: <code id="pair-cmd"></code></div>
+  <div class="muted">The code works once and expires in 10 minutes.</div>
+</div>
+<div id="banner" class="notice error hidden"></div>
+
+<main>
+  <section id="skills-col">
+    <h2>Skills</h2>
+    <div id="skills" class="list"><div class="muted">No skills yet. Teach one in the middle panel.</div></div>
+    <div id="skill-detail" class="hidden">
+      <h3 id="skill-title"></h3>
+      <div id="skill-desc" class="muted"></div>
+      <form id="run-form"></form>
+      <div id="drop" class="drop">Drop an invoice, order or sheet here and Gemini fills the inputs</div>
+      <div class="row">
+        <button id="run-btn">Run</button>
+        <select id="heal-mode" title="What to do if a step fails">
+          <option value="auto">Gemini heals</option>
+          <option value="host">Ask me</option>
+          <option value="off">Stop on failure</option>
+        </select>
+      </div>
+      <details open><summary>Code</summary><pre id="skill-code"></pre></details>
+      <details><summary>Heal history</summary><div id="skill-history" class="muted">No heals yet.</div></details>
+    </div>
+  </section>
+
+  <section id="session-col">
+    <h2>Session</h2>
+    <div id="log" class="log" aria-live="polite"></div>
+    <form id="teach" class="composer">
+      <textarea id="goal" rows="3" placeholder="Describe a task to teach, e.g. Enter invoice INV-1042 for Contoso Supplies, amount 1200, then save it."></textarea>
+      <div class="row">
+        <input id="skill-name" placeholder="Skill name, e.g. enter_invoice" required>
+        <button type="submit">Teach</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="screen-col">
+    <h2>Numbers</h2>
+    <div id="metrics" class="metrics"></div>
+    <h2>Screen</h2>
+    <div class="row">
+      <input id="target" placeholder="Window title or app, e.g. Invoice">
+      <button id="target-btn" class="ghost">Target</button>
+      <button id="see-btn" class="ghost">Read</button>
+    </div>
+    <iframe id="view" class="hidden" title="Live sandbox screen"></iframe>
+    <pre id="screen" class="screen">Press Read to see what the agent sees.</pre>
+    <h2>Recent runs</h2>
+    <div id="runs" class="list"></div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
