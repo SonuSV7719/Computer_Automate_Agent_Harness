@@ -1,0 +1,7 @@
+.venv
+.git
+.livetest
+**/__pycache__
+tests
+dashboard/node_modules
+*.log

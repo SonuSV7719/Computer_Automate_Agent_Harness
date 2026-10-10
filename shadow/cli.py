@@ -23,7 +23,7 @@ HOME = Path(os.environ.get("SHADOW_HOME", Path.home() / ".shadow"))
 EXIT = {"expect": 2, "stale": 3, "needs_heal": 4, "needs_human": 5}
 
 
-def _request(path: str, body: dict | None = None, timeout: float = 60.0) -> dict:
+def _request(path: str, body: dict | None = None, timeout: float = 900.0) -> dict:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(BASE + path, data=data, method="GET" if body is None else "POST",
                                  headers={"Content-Type": "application/json"})
@@ -183,6 +183,23 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("runs", help="recent runs with timing and LLM calls")
 
+    ln = sub.add_parser("learn", help="Gemini performs a task once and it is saved as a skill")
+    ln.add_argument("goal", help="what to do, in plain words")
+    ln.add_argument("--name", required=True, help="name for the skill")
+    ln.add_argument("--desc", default="")
+    ln.add_argument("--max-steps", type=int, default=30)
+
+    ex = sub.add_parser("extract", help="read a document's text into a skill's inputs with Gemini")
+    ex.add_argument("skill")
+    ex.add_argument("file", help="a text file, or - for standard input")
+
+    pr = sub.add_parser("pair", help="connect this machine to the web harness")
+    pr.add_argument("code", help="the pairing code shown in the web harness")
+    pr.add_argument("--url", default=os.environ.get("SHADOW_BRAIN_URL", ""), help="the brain's address")
+    pr.add_argument("--name", default="")
+
+    sub.add_parser("status", help="daemon, pairing and Gemini status")
+
     args = parser.parse_args(argv)
     as_json = args.json
 
@@ -275,6 +292,36 @@ def main(argv: list[str] | None = None) -> int:
         decision["reason"] = args.escalate or args.reason
         reply = call("/heal", {"run": args.run, "decision": decision})
         return _finish(reply, as_json, _run_text(reply) or "")
+
+    if args.cmd == "learn":
+        reply = call("/learn", {"goal": args.goal, "name": args.name, "description": args.desc,
+                                "max_steps": args.max_steps})
+        if "llm_calls" not in reply:
+            return _finish(reply, as_json, "")
+        lines = [f"{reply['status']} in {reply['ms']} ms | {reply['steps']} steps | {reply['llm_calls']} LLM calls"]
+        lines += [f"  {n + 1}. {h['summary']} -> {h['outcome'][:110]}" for n, h in enumerate(reply["history"])]
+        if reply.get("result"):
+            lines.append(reply["result"])
+        if reply.get("code"):
+            lines += ["", f"saved skill '{reply['skill']}' v{reply['version']}", "", reply["code"]]
+        return _finish(reply, as_json, "\n".join(lines))
+
+    if args.cmd == "extract":
+        text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8", errors="replace")
+        reply = call("/extract", {"skill": args.skill, "text": text})
+        text_out = " ".join(f"-p {k}={json.dumps(v)}" for k, v in (reply.get("values") or {}).items())
+        return _finish(reply, as_json, text_out or "(nothing found)")
+
+    if args.cmd == "pair":
+        if not args.url:
+            parser.error("pair needs --url (or set SHADOW_BRAIN_URL)")
+        reply = call("/pair", {"url": args.url, "code": args.code, "name": args.name})
+        return _finish(reply, as_json, f"paired as device {reply.get('device_id')} with {reply.get('url')}")
+
+    if args.cmd == "status":
+        reply = call("/status")
+        return _finish(reply, as_json, f"daemon running (pid {reply.get('pid')})\n"
+                       f"paired: {reply.get('brain') or 'no'}\nGemini: {reply.get('gemini')}")
 
     if args.cmd == "runs":
         reply = call("/runs", {})
