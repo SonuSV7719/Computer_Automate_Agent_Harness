@@ -13,7 +13,9 @@ from typing import Optional, Protocol
 
 from .. import net
 
-DEFAULT_MODEL = "gemini-3.8-flash"
+# Fast, and usable on a free-tier key. With a billed key, SHADOW_GEMINI_MODEL=gemini-3.8-flash
+# gives a stronger model (its free tier allows only 5 requests a minute).
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 MAX_RATE_WAIT = 45.0  # longest we wait out a per-minute rate limit before giving up

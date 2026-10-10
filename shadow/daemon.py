@@ -441,9 +441,21 @@ def shutdown() -> dict:
     return {"ok": True}
 
 
+def _load_env_file() -> None:
+    """Settings such as GEMINI_API_KEY may live in <home>/.env, one NAME=value per line."""
+    path = HOME / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, sep, value = line.strip().partition("=")
+        if sep and name and not name.startswith("#"):
+            os.environ.setdefault(name.strip(), value.strip().strip('"'))
+
+
 def main() -> None:
     global _server
     HOME.mkdir(parents=True, exist_ok=True)
+    _load_env_file()
     def warm() -> None:
         from .drivers.com import init_thread
         init_thread()

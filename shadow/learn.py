@@ -5,6 +5,7 @@ import time
 from typing import Callable, Optional
 
 from .core import expect as expectation
+from .core import textmatch
 from .engine import Halted, StaleSnapshot
 from .llm import planner
 from .llm.client import LlmClient
@@ -36,15 +37,55 @@ def _usable_expectation(step: dict, snap) -> Optional[str]:
     return spec
 
 
+def _keep_prediction(spec: str, outcome: dict, typed: list[str]) -> bool:
+    """A prediction that came true is kept, unless it is a counter that will differ next run."""
+    counters = outcome.get("counter_text") or []
+    for kind, text in expectation.parse(spec):
+        if kind == "text" and any(text in counter for counter in counters)                 and not any(v and v in text for v in typed):
+            return False
+    return True
+
+
 def _observed_expectation(action: str, outcome: dict, typed: list[str]) -> Optional[str]:
     """A post-condition taken from what really appeared after a click or key press."""
     if action in ("type", "append", "select", "scroll", "focus"):
         return None
     new_text = [t for t in outcome.get("new_text") or [] if 3 <= len(t) <= 120]
-    if not new_text:
-        return None
     quoting = [t for t in new_text if any(v and v in t for v in typed)]
-    return "text:" + (quoting or new_text)[0]
+    if quoting:
+        return "text:" + quoting[0]  # e.g. "Saved INV-1042": follows the input on every run
+    counters = set(outcome.get("counter_text") or [])
+    steady = [t for t in new_text if t not in counters]
+    return "text:" + steady[0] if steady else None
+
+
+def _settle_action(step: dict, snap) -> Optional[str]:
+    """The model's action, corrected when the element plainly calls for another one."""
+    action = step.get("action") or _infer_action(step, snap)
+    if action == "click" and step.get("value"):
+        try:
+            actions = snap.get(int(step["index"])).actions
+        except (KeyError, TypeError, ValueError):
+            return action
+        if "click" not in actions and "select" in actions:
+            return "select"  # "click the dropdown with this option" means choosing the option
+    return action
+
+
+def _settle_target(step: dict, snap) -> None:
+    """If the model pointed at a label, act on the field that label names instead."""
+    action = step.get("action")
+    if action not in ("type", "append", "select"):
+        return
+    try:
+        chosen = snap.get(int(step["index"]))
+    except (KeyError, TypeError, ValueError):
+        return
+    if action in chosen.actions or not chosen.title:
+        return
+    fields = [e for e in snap.elements if action in e.actions and textmatch.same(e.title, chosen.title, ocr=True)]
+    if len(fields) == 1:
+        step["index"] = fields[0].index
 
 
 def _infer_action(step: dict, snap) -> Optional[str]:
@@ -85,8 +126,9 @@ def learn(call: Callable, client: LlmClient, goal: str, max_steps: int = MAX_STE
                     result.update(ok=True, status="done", result=summary)
                 break
 
-            action = step.get("action") or _infer_action(step, snap)
+            action = _settle_action(step, snap)
             step["action"] = action
+            _settle_target(step, snap)
             needs_index = action not in ("key", "text")
             if not action or (needs_index and step.get("index") is None):
                 errors += 1
@@ -108,7 +150,7 @@ def learn(call: Callable, client: LlmClient, goal: str, max_steps: int = MAX_STE
                     # predicted. Its check is taken from what the screen actually did.
                     recorded = dict(outcome["step"])
                     recorded["irreversible"] = bool(step.get("irreversible"))
-                    if not (wanted and outcome["ok"]):
+                    if not (wanted and outcome["ok"] and _keep_prediction(wanted, outcome, typed)):
                         recorded["expect"] = _observed_expectation(action, outcome, typed)
                     trace.append(recorded)
                     if step.get("value") and action in ("type", "append", "select"):

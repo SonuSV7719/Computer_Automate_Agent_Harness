@@ -211,3 +211,34 @@ def test_a_right_retarget_with_a_stale_check_keeps_both_repairs(engine, driver):
                       {"invoice_no": "INV-10", "amount": "6"})
     assert again["ok"] and again["llm_calls"] == 0
     assert [row.split(" | ")[0] for row in driver.saved[-2:]] == ["INV-9", "INV-10"]  # typed once each, not twice
+
+
+def test_pointing_at_a_label_acts_on_the_field_it_names(engine, driver):
+    class LabelLlm(ScriptedLlm):
+        def json(self, system, user, schema, files=None):
+            reply = super().json(system, user, schema, files)
+            screen = user.split("CURRENT SCREEN\n", 1)[1]
+            if reply.get("intent") == "Enter the amount":
+                reply["index"] = index_of(screen, 'text "Amount"')  # the label, not the input
+            return reply
+
+    result = learn(direct(engine), LabelLlm(), "Enter invoice INV-9001")
+    assert result["ok"]
+    assert result["trace"][2]["fingerprint"]["role"] == "input"
+    assert result["trace"][2]["fingerprint"]["automation_id"] == "txtAmount"
+
+
+def test_a_counter_is_not_used_as_a_post_condition():
+    from shadow.learn import _observed_expectation
+    outcome = {"new_text": ["Strokes: 1"], "counter_text": ["Strokes: 1"]}
+    assert _observed_expectation("drag", outcome, []) is None
+    outcome = {"new_text": ["Saved INV-2", "Rows: 2"], "counter_text": ["Saved INV-2", "Rows: 2"]}
+    assert _observed_expectation("click", outcome, ["INV-2"]) == "text:Saved INV-2"  # quotes the input: dependable
+    assert _observed_expectation("click", {"new_text": ["Order placed"], "counter_text": []}, []) == "text:Order placed"
+
+
+def test_a_counter_predicted_by_the_model_is_dropped_too():
+    from shadow.learn import _keep_prediction
+    assert not _keep_prediction("text:Strokes: 1", {"counter_text": ["Strokes: 1"]}, [])
+    assert _keep_prediction("text:Saved INV-2", {"counter_text": ["Saved INV-2"]}, ["INV-2"])
+    assert _keep_prediction("window:Invoice", {"counter_text": ["Strokes: 1"]}, [])

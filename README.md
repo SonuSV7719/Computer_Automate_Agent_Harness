@@ -48,10 +48,13 @@ All figures are from the live test scripts in `tests/live/`, on a 12-core Window
 | Replay a 4-step skill on a tree-backed app | 0.53-0.69 s, 0 LLM calls |
 | Replay the same task on an app with no element names (vision) | 1.8-3.7 s, 0 LLM calls |
 | First vision read of a window / an unchanged window | about 1-1.4 s / about 0.1 s |
-| UI change (2 controls renamed and moved) | healed with 2 LLM calls, saved as version 2, next replay 0 calls |
-| Invoice over the purchase-order limit | run stops and reports the application's own message; skill unchanged |
+| Gemini learns a 4-step task from one sentence (`gemini-3.5-flash-lite`) | 11-14 s, 5 LLM calls |
+| Gemini learns a browser form plus a drawing on a canvas | 16-24 s, 6 LLM calls; replays in 1.3-1.8 s, 0 calls |
+| UI change (2 controls renamed and moved) | Gemini healed both with 2 LLM calls in about 5 s, saved as version 2, next replay 0 calls |
+| Invoice over the purchase-order limit | run stops for a person; skill unchanged |
+| Gemini reads a text invoice into the skill's inputs | invoice number, vendor and amount all correct |
 
-Learning time depends on Gemini's response time and is not included above: the tests in this repository replace Gemini with a scripted stand-in (see [Testing](#testing)).
+So the same task costs 5 LLM calls and about 14 s the first time, and 0 calls and about 0.55 s every time after.
 
 ## How it works
 
@@ -107,7 +110,7 @@ shadow record save enter_invoice
 shadow run enter_invoice -p invoice_no=INV-2001 -p amount=75
 ```
 
-Let Gemini teach it (needs `GEMINI_API_KEY`, or a paired brain):
+Let Gemini teach it. Put `GEMINI_API_KEY=...` in `~/.shadow/.env` (or the environment), or pair with a brain. The default model is `gemini-3.5-flash-lite`, which is fast and works on a free-tier key; with a billed key, `SHADOW_GEMINI_MODEL=gemini-3.8-flash` selects a stronger one (its free tier allows only 5 requests a minute).
 
 ```
 shadow learn "Enter invoice INV-1042 for Contoso Supplies, amount 1200, then save it." --name enter_invoice
@@ -169,17 +172,19 @@ How each required technology is used:
 ## Testing
 
 ```
-pytest                                  # 66 tests, any OS, no desktop needed
+pytest                                  # 74 tests, any OS, no desktop needed
 bash tests/live/run_live.sh             # real WinForms app: record, replay, UI change, heal, exception
 bash tests/live/run_live_cv.sh          # real Tk app with no element names: the vision path end to end
 bash tests/live/run_live_stack.sh       # web request -> brain -> paired agent -> real app
+bash tests/live/run_live_gemini.sh      # real Gemini: learn, replay, heal, exception, document
 (cd dashboard && firebase emulators:exec --only firestore --project demo-shadow "python -m pytest ../tests/test_store.py")
 ```
 
 What is and is not covered:
 
 - **Covered on real Windows apps:** reading, acting, recording, compiling, replay, healing through the CLI, the vision path, a browser page with a canvas (form through the tree; drag, click-at and a pixel-only button on the canvas), and the web harness driven in Chrome.
-- **Covered with a scripted stand-in for Gemini:** the learn loop, LLM healing and document reading. The harness around the model is tested; the quality of Gemini's own decisions is not, because no API key was available while building.
+- **Covered with real Gemini** (`run_live_gemini.sh`, plus manual runs): learning on a tree-backed app, on the vision-only app, and on a browser page with a canvas; healing a changed UI; reading a text document into inputs. Reading PDFs and images through the web harness has not been tried.
+- **Covered with a scripted stand-in for Gemini:** the unit tests and the full-stack script, so they run without a key.
 - **Covered on the Firestore emulator:** the brain's storage layer.
 - **Not yet run:** deployment to Google Cloud, and the sandbox container end to end.
 
@@ -188,6 +193,7 @@ What is and is not covered:
 - Windows is the full platform. Linux (X11) is supported as pixels only, for the sandbox. macOS is not supported.
 - OCR misreads happen, mostly on small digits. Text read by OCR is matched with look-alike characters folded together (9/g, 0/O, 1/l), and each such element shows its confidence.
 - Vision finds inputs, buttons, checkboxes with a label, and text. It does not name icons that carry no text.
+- A post-condition is taken from what appeared on screen when the step was taught. If the model marks a step irreversible and its confirmation does not appear, the run stops for a person without asking Gemini.
 - A window must not be minimised. Clicking an element that exists only as pixels moves the real mouse and brings the window to the front.
 - Elevated windows need the daemon to run as administrator. The Windows secure desktop cannot be automated.
 - Password fields are shown masked and are never read.

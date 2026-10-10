@@ -18,6 +18,7 @@ from .core.serialize import serialize
 
 _DIGITS = re.compile(r"\d+")
 SETTLE_TIMEOUT = 1.2
+VERIFY_TIMEOUT = 1.5
 POLL = 0.08
 ELEMENTLESS = {"key", "text"}
 
@@ -30,6 +31,13 @@ def _new_text(before: Snapshot, after: Snapshot) -> list[str]:
     old, new = texts(before), texts(after)
     added = [name for name in new if name not in old]
     return sorted(added, key=lambda name: new[name] != "text")
+
+
+def _counters(before: Snapshot, after: Snapshot) -> list[str]:
+    """New text that is an old text with only its digits changed ("Strokes: 0" -> "Strokes: 1").
+    Such text differs on every run, so it is not a dependable sign that a step worked."""
+    shapes = {_DIGITS.sub("#", e.name) for e in before.elements if e.name}
+    return [name for name in _new_text(before, after) if _DIGITS.sub("#", name) in shapes]
 
 
 class StaleSnapshot(Exception):
@@ -249,6 +257,7 @@ class Engine:
             "ok": ok,
             "step": step,
             "new_text": _new_text(before, after) if after else [],
+            "counter_text": _counters(before, after) if after else [],
             "route": route,
             "ms": round(ms, 1),
             "snapshot": (after or before).id,
@@ -262,9 +271,14 @@ class Engine:
         read = getattr(self.driver, "read_value", None)
         if read is None or action not in ("type", "select") or element.masked or element.source != "tree":
             return
-        shown = read(element)
-        if shown is not None and textmatch.squash(shown) != textmatch.squash(value or ""):
-            raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
+        deadline = time.perf_counter() + VERIFY_TIMEOUT
+        while True:  # browsers update their accessibility values a moment after the input changes
+            shown = read(element)
+            if shown is None or textmatch.squash(shown) == textmatch.squash(value or ""):
+                return
+            if time.perf_counter() >= deadline:
+                raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
+            time.sleep(0.05)
 
     # ---- recording -----------------------------------------------------
     def record_start(self) -> None:
