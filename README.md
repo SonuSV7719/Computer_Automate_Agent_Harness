@@ -129,6 +129,15 @@ shadow learn "Enter invoice INV-1042 for Contoso Supplies, amount 1200, then sav
 | `shadow runs` | Recent runs with timing and LLM calls |
 | `shadow extract <skill> <file>` | Read a document's text into a skill's inputs |
 | `shadow pair <code> --url <brain>` / `status` | Connect to the web harness |
+| `shadow stop` / `resume` | Kill switch: stop touching the desktop now, and allow it again |
+
+### Safety
+
+- **Kill switch.** `shadow stop`, or **Ctrl+Alt+F12** anywhere on the desktop, blocks every action at once and ends the current run as stopped. Nothing runs again until `shadow resume` or a new run is started.
+- **Allowlist.** Set `SHADOW_ALLOW=erp.exe,chrome.exe` and the agent refuses to read or act on any other application.
+- **Passwords.** Masked fields are shown as `••••`. A value typed into one is never written to a recording or a skill; it becomes an empty input you supply at run time.
+- **Irreversible steps** (pay, post, send, delete) are never repaired automatically; the run stops for a person.
+- **Never silent.** A step whose expected result does not appear stops the run. A locator that matches two elements is refused.
 
 ## Use it from another AI agent
 
@@ -160,17 +169,19 @@ How each required technology is used:
 ## Testing
 
 ```
-pytest                                  # 53 tests, any OS, no desktop needed
+pytest                                  # 66 tests, any OS, no desktop needed
 bash tests/live/run_live.sh             # real WinForms app: record, replay, UI change, heal, exception
 bash tests/live/run_live_cv.sh          # real Tk app with no element names: the vision path end to end
 bash tests/live/run_live_stack.sh       # web request -> brain -> paired agent -> real app
+(cd dashboard && firebase emulators:exec --only firestore --project demo-shadow "python -m pytest ../tests/test_store.py")
 ```
 
 What is and is not covered:
 
 - **Covered on real Windows apps:** reading, acting, recording, compiling, replay, healing through the CLI, the vision path, a browser page with a canvas (form through the tree; drag, click-at and a pixel-only button on the canvas), and the web harness driven in Chrome.
 - **Covered with a scripted stand-in for Gemini:** the learn loop, LLM healing and document reading. The harness around the model is tested; the quality of Gemini's own decisions is not, because no API key was available while building.
-- **Not yet run:** deployment to Google Cloud.
+- **Covered on the Firestore emulator:** the brain's storage layer.
+- **Not yet run:** deployment to Google Cloud, and the sandbox container end to end.
 
 ## Limits
 
