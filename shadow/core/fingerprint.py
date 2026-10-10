@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from . import textmatch
 from .elements import Element, Snapshot
 from .serialize import visible
 
@@ -70,18 +71,20 @@ def make(e: Element, snapshot: Snapshot) -> dict:
     }
 
 
-def _same_text(a: str, b: str) -> bool:
-    return a.strip().casefold() == b.strip().casefold()
+def _same_text(a: str, b: str, fuzzy: bool = False) -> bool:
+    """Same text ignoring case and spacing; OCR-read text also ignores look-alike characters."""
+    return textmatch.same(a, b, ocr=fuzzy)
 
 
 def _confirm(e: Element, fp: dict, skip: str) -> int:
     """How many properties other than `skip` agree with the fingerprint."""
     score = 0
+    fuzzy = fp.get("source", "tree") != "tree"
     if skip != "role" and e.role == fp["role"]:
         score += 1
-    if skip != "name" and fp.get("name") and _same_text(e.name, fp["name"]):
+    if skip != "name" and fp.get("name") and _same_text(e.name, fp["name"], fuzzy):
         score += 1
-    if skip != "label" and fp.get("label") and _same_text(e.label, fp["label"]):
+    if skip != "label" and fp.get("label") and _same_text(e.label, fp["label"], fuzzy):
         score += 1
     if skip != "class" and fp.get("class_name") and e.class_name == fp["class_name"]:
         score += 1
@@ -105,6 +108,7 @@ def _pick(candidates: list[Element], fp: dict, skip: str) -> Optional[Element]:
 def resolve(fp: dict, snapshot: Snapshot) -> tuple[Optional[Element], str]:
     """Find the fingerprinted element. Returns (element, locator used) or (None, reason)."""
     pool = [e for e in snapshot.elements if visible(e)]
+    fuzzy = fp.get("source", "tree") != "tree"
 
     if fp.get("automation_id"):
         hit = _pick([e for e in pool if e.automation_id == fp["automation_id"]], fp, "automation_id")
@@ -112,12 +116,14 @@ def resolve(fp: dict, snapshot: Snapshot) -> tuple[Optional[Element], str]:
             return hit, "automation_id"
 
     if fp.get("name"):
-        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.name, fp["name"])], fp, "role")
+        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.name, fp["name"], fuzzy)],
+                    fp, "role")
         if hit:
             return hit, "role+name"
 
     if fp.get("label"):
-        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.label, fp["label"])], fp, "role")
+        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.label, fp["label"], fuzzy)],
+                    fp, "role")
         if hit:
             return hit, "role+label"
 

@@ -94,6 +94,8 @@ def describe(e: Element, with_index: bool = True) -> str:
     flags = []
     if e.checked:
         flags.append(e.checked)
+    if e.source == "merged" and e.confidence is not None:
+        flags.append(f"read by ocr {e.confidence:.2f}")
     if e.selected:
         flags.append("selected")
     if e.expanded is not None:
@@ -117,6 +119,8 @@ def describe(e: Element, with_index: bool = True) -> str:
         if options:
             shown = " | ".join(_clip(o, 30) for o in options[:12])
             flags.append(f"options: {shown}" + (f" | +{len(options) - 12} more" if len(options) > 12 else ""))
+    if e.role == "region":
+        flags.append("no tree, read by CV")
     if e.source == "cv":
         flags.append(f"cv {e.confidence:.2f}" if e.confidence is not None else "cv")
     if flags:

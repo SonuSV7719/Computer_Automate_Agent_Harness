@@ -217,10 +217,13 @@ class WindowsDriver:
 
     def _focus(self, e: Element) -> None:
         win_input.focus_window(e.root_hwnd)
-        try:
-            e.handle.SetFocus()
-        except Exception:
+        if e.source != "tree":  # a surface the tree cannot describe: only a real click focuses it reliably
             win_input.click(*e.center)
+        else:
+            try:
+                e.handle.SetFocus()
+            except Exception:
+                win_input.click(*e.center)
         time.sleep(0.03)
 
     def _current_value(self, e: Element) -> str:
@@ -274,9 +277,12 @@ class WindowsDriver:
         if not e.enabled:
             raise RuntimeError(f"element [{e.index}] is disabled")
         tree_backed = e.source != "cv" and e.handle is not None
+        if action == "type" and e.source == "merged" and "value" not in e.patterns:
+            pass  # typed with real keys below
 
         if action == "click":
-            if tree_backed:
+            # A control the tree could not even name often ignores UIA calls; click it for real.
+            if tree_backed and e.source == "tree":
                 if "invoke" in e.patterns and self._pattern(
                         e, UIA.UIA_InvokePatternId, UIA.IUIAutomationInvokePattern, lambda p: p.Invoke()):
                     return "uia.invoke"
@@ -304,8 +310,13 @@ class WindowsDriver:
             else:
                 self._mouse_click(e)
             if action == "type":
+                # Select-all differs by toolkit (Ctrl+A in Win32, End then Shift+Home in Tk); do both.
                 win_input.press("ctrl+a")
                 win_input.press("delete")
+                if e.role != "document":
+                    win_input.press("end")
+                    win_input.press("shift+home")
+                    win_input.press("delete")
             else:
                 win_input.press("ctrl+end")
             win_input.type_text(text)
@@ -357,6 +368,20 @@ class WindowsDriver:
         win_input.type_text(text)
 
     # ---- capture -------------------------------------------------------
+    def capture_window(self, hwnd: int, box: Box):
+        """The window's own content, so vision is not fooled by whatever covers it."""
+        from PIL import Image
+
+        shot = win_input.capture_window(hwnd)
+        if shot is not None:
+            w, h, raw = shot
+            image = Image.frombuffer("RGB", (w, h), raw, "raw", "BGRX", 0, 1)
+            if image.getbbox() is not None:  # an all-black frame means the window refused
+                size = (box[2] - box[0], box[3] - box[1])
+                return image if image.size == size else image.resize(size, Image.BILINEAR)
+        win_input.focus_window(hwnd)
+        return self.capture(box)
+
     def capture(self, box: Box):
         import mss
         from PIL import Image

@@ -4,6 +4,7 @@ Everything above it (CLI, daemon, learn loop, replay) goes through this class.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from typing import Optional
@@ -25,11 +26,14 @@ class StaleSnapshot(Exception):
 
 
 class Engine:
-    def __init__(self, driver=None) -> None:
+    def __init__(self, driver=None, perceiver=None, cv: bool = True) -> None:
         if driver is None:
             from .drivers.windows import WindowsDriver
             driver = WindowsDriver()
         self.driver = driver
+        self.cv_enabled = cv and os.environ.get("SHADOW_CV", "1") != "0"
+        self._perceiver = perceiver
+        self.cv_stats: dict = {}
         self.target: Optional[int] = None
         self.snapshot: Optional[Snapshot] = None
         self._counter = 0
@@ -78,13 +82,47 @@ class Engine:
         return hwnd
 
     # ---- perception ----------------------------------------------------
-    def see(self) -> Snapshot:
+    def _merge_cv(self, hwnd: int, info: WindowInfo, roots: list[Element]) -> None:
+        """Fill what the tree cannot describe from the pixels."""
+        import numpy as np
+
+        from .cv.merge import known_boxes, merge
+        from .cv.perceive import Perceiver
+
+        if self._perceiver is None:
+            self._perceiver = Perceiver()
+        started = time.perf_counter()
+        grab = getattr(self.driver, "capture_window", None)
+        shot = grab(hwnd, info.box) if grab else self.driver.capture(info.box)
+        image = np.ascontiguousarray(np.asarray(shot)[:, :, ::-1])
+        lines = self._perceiver.lines(hwnd, image, known_boxes(roots, info.box))
+        self.cv_stats = merge(roots, info.box, image, lines)
+        self.cv_stats.update(self._perceiver.last, ms=round((time.perf_counter() - started) * 1000, 1))
+
+    def warm_up(self) -> None:
+        """Load the OCR models ahead of the first read (about two seconds)."""
+        if self.cv_enabled:
+            import numpy as np
+
+            from .cv.perceive import Perceiver
+            if self._perceiver is None:
+                self._perceiver = Perceiver()
+            self._perceiver.ocr.read(np.full((48, 160, 3), 255, np.uint8))
+
+    def see(self, cv: Optional[bool] = None) -> Snapshot:
+        """Read the target window. cv=None runs vision only when the tree needs it;
+        cv=False skips it, which replay uses for skills that never touched a CV element."""
         started = time.perf_counter()
         hwnd = self._hwnd()
         info = self.driver.window_info(hwnd)
         roots = self.driver.tree(hwnd)
         if not roots:
             raise LookupError(f"window '{info.title}' has no readable UI tree")
+        self.cv_stats = {}
+        if cv is not False and self.cv_enabled:
+            from .cv.merge import needs_cv
+            if needs_cv(roots):
+                self._merge_cv(hwnd, info, roots)
         self._counter += 1
         ms = (time.perf_counter() - started) * 1000
         snap = Snapshot(id=self._counter, window=info, roots=roots, ms=ms)
@@ -92,12 +130,13 @@ class Engine:
         self.snapshot = snap
         return snap
 
-    def _settle(self, spec: Optional[str], timeout: float) -> tuple[Snapshot, Optional[bool]]:
+    def _settle(self, spec: Optional[str], timeout: float,
+                cv: Optional[bool] = None) -> tuple[Snapshot, Optional[bool]]:
         """Wait for the expected result, or for the screen to stop changing."""
         deadline = time.perf_counter() + (timeout if spec else SETTLE_TIMEOUT)
         previous_body = None
         while True:
-            snap = self.see()
+            snap = self.see(cv)
             if spec:
                 if expectation.check(spec, snap):
                     return snap, True
@@ -111,7 +150,8 @@ class Engine:
     # ---- actions -------------------------------------------------------
     def act(self, action: str, index: Optional[int] = None, value: Optional[str] = None,
             snapshot_id: Optional[int] = None, expect: Optional[str] = None,
-            timeout: float = 3.0, intent: str = "", settle: bool = True) -> dict:
+            timeout: float = 3.0, intent: str = "", settle: bool = True,
+            cv: Optional[bool] = None) -> dict:
         """Perform one action. With settle=False and no expectation the call returns
         straight after the action, which is what replay uses between checkpoints."""
         if expect:
@@ -142,7 +182,7 @@ class Engine:
             route = self.driver.perform(element, action, value)
 
         if expect or settle:
-            after, met = self._settle(expect, timeout)
+            after, met = self._settle(expect, timeout, cv)
         else:
             after, met = None, None
         ms = (time.perf_counter() - started) * 1000

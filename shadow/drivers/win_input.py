@@ -15,7 +15,9 @@ dwmapi = ctypes.WinDLL("dwmapi")
 ULONG_PTR = ctypes.c_size_t
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
-KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0001, 0x0002, 0x0004
+# Navigation keys must be sent as extended keys, or Shift+Home is read as a numpad key.
+EXTENDED = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E}
 MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0002, 0x0004
 MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP = 0x0008, 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
@@ -149,7 +151,11 @@ def press(combo: str) -> None:
             codes.append(scan & 0xFF)
         else:
             raise ValueError(f"unknown key: {part}")
-    _send(*[_key(vk=c) for c in codes], *[_key(vk=c, flags=KEYEVENTF_KEYUP) for c in reversed(codes)])
+    def flags(code: int) -> int:
+        return KEYEVENTF_EXTENDEDKEY if code in EXTENDED else 0
+
+    _send(*[_key(vk=c, flags=flags(c)) for c in codes],
+          *[_key(vk=c, flags=flags(c) | KEYEVENTF_KEYUP) for c in reversed(codes)])
 
 
 def _text(fn, hwnd, size: int = 512) -> str:
@@ -238,6 +244,83 @@ def popups_of(hwnd: int) -> list[int]:
         if info.class_name == MENU_CLASS or _root_owner(other) == hwnd:
             out.append(other)
     return out
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD)]
+
+
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+user32.GetWindowDC.argtypes = [wintypes.HWND]
+user32.GetWindowDC.restype = wintypes.HDC
+user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+gdi32.CreateCompatibleDC.restype = wintypes.HDC
+gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+gdi32.SelectObject.restype = wintypes.HGDIOBJ
+gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                            ctypes.c_void_p, wintypes.UINT]
+gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+gdi32.DeleteDC.argtypes = [wintypes.HDC]
+
+
+def capture_window(hwnd: int):
+    """The window's own pixels as (width, height, BGRX bytes), even when other windows cover it.
+    Returns None when the window cannot render itself this way.
+
+    A window that is not DPI-aware renders at its own smaller size and Windows stretches it,
+    so we read it in the window's coordinate space; the caller scales it to screen pixels."""
+    if user32.IsIconic(hwnd):
+        return None
+    previous_context = None
+    try:
+        user32.GetWindowDpiAwarenessContext.argtypes = [wintypes.HWND]
+        user32.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        previous_context = user32.SetThreadDpiAwarenessContext(user32.GetWindowDpiAwarenessContext(hwnd))
+    except (AttributeError, OSError):
+        pass  # older Windows: everything shares one coordinate space
+    try:
+        return _print_window(hwnd)
+    finally:
+        if previous_context:
+            user32.SetThreadDpiAwarenessContext(previous_context)
+
+
+def _print_window(hwnd: int):
+    rect = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    if w <= 0 or h <= 0:
+        return None
+    window_dc = user32.GetWindowDC(hwnd)
+    if not window_dc:
+        return None
+    memory_dc = gdi32.CreateCompatibleDC(window_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(window_dc, w, h)
+    previous = gdi32.SelectObject(memory_dc, bitmap)
+    try:
+        if not user32.PrintWindow(hwnd, memory_dc, 2):  # 2 = render full content, including GPU surfaces
+            return None
+        header = BITMAPINFOHEADER(biSize=ctypes.sizeof(BITMAPINFOHEADER), biWidth=w, biHeight=-h,
+                                  biPlanes=1, biBitCount=32, biCompression=0)
+        buffer = ctypes.create_string_buffer(w * h * 4)
+        if not gdi32.GetDIBits(memory_dc, bitmap, 0, h, buffer, ctypes.byref(header), 0):
+            return None
+        return w, h, buffer.raw
+    finally:
+        gdi32.SelectObject(memory_dc, previous)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory_dc)
+        user32.ReleaseDC(hwnd, window_dc)
 
 
 def foreground() -> int:

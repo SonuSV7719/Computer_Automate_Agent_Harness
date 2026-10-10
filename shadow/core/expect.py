@@ -8,6 +8,7 @@ Spec forms (join several with ' && '):
 """
 from __future__ import annotations
 
+from . import textmatch
 from .elements import Snapshot
 from .serialize import visible
 
@@ -28,22 +29,22 @@ def parse(spec: str) -> list[tuple[str, str]]:
 
 
 def _has_text(snapshot: Snapshot, needle: str) -> bool:
-    needle = needle.casefold()
     for root in snapshot.roots:
         for e in root.walk():
             if e is not root and not visible(e):
                 continue
+            read_by_ocr = e.source != "tree"
             for field in (e.name, e.label, e.value or ""):
-                if needle in field.casefold():
+                if textmatch.contains(field, needle, ocr=read_by_ocr):
                     return True
     return False
 
 
 def _has_value(snapshot: Snapshot, arg: str) -> bool:
     title, _, want = arg.partition("=")
-    title, want = title.strip().casefold(), want.strip().casefold()
     for e in snapshot.elements:
-        if e.title.casefold() == title and (e.value or "").strip().casefold() == want:
+        read_by_ocr = e.source != "tree"
+        if textmatch.same(e.title, title, read_by_ocr) and textmatch.same(e.value or "", want, read_by_ocr):
             return True
     return False
 

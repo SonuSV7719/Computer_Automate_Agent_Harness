@@ -208,6 +208,16 @@ def shutdown() -> dict:
 def main() -> None:
     global _server
     HOME.mkdir(parents=True, exist_ok=True)
+    def warm() -> None:
+        from .drivers.com import init_thread
+        init_thread()
+        try:
+            _worker.submit(_get_engine).result()
+            _get_engine().warm_up()
+        except Exception:
+            pass  # vision is optional; the first read will report any real problem
+
+    threading.Thread(target=warm, name="warm-up", daemon=True).start()
     _server = uvicorn.Server(uvicorn.Config(app, host=HOST, port=PORT, log_level="warning"))
     _server.run()
 

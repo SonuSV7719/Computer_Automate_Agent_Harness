@@ -50,6 +50,8 @@ class Runner:
         self.on_event = on_event
         self.max_heals = max_heals
         self.locators = copy.deepcopy(skill.locators)
+        # Skills that never touched a vision-read element replay on the tree alone.
+        self.cv = None if any(v["fingerprint"].get("source") != "tree" for v in skill.locators.values()) else False
         self.patches: list[dict] = []
         self.events: list[dict] = []
         self.llm_calls = 0
@@ -82,16 +84,18 @@ class Runner:
         def run(e):
             try:
                 if fp is None:
-                    result = e.act(action, value=value, expect=spec, timeout=timeout, settle=False)
+                    result = e.act(action, value=value, expect=spec, timeout=timeout, settle=False, cv=self.cv)
                     how = "keys"
                 else:
-                    snap = e.see()
+                    snap = e.see(self.cv)
                     element, how = fingerprint.resolve(fp, snap)
                     if element is None:
+                        if self.cv is False:
+                            snap = e.see()  # show the healer everything, vision included
                         return {"status": "locator", "detail": "element not found on screen",
                                 "screen": snap.text, "body": snap.body}
                     result = e.act(action, index=element.index, value=value, snapshot_id=snap.id,
-                                   expect=spec, timeout=timeout, settle=False)
+                                   expect=spec, timeout=timeout, settle=False, cv=self.cv)
             except (RuntimeError, ValueError, LookupError) as exc:
                 snap = e.see()
                 return {"status": "action", "detail": str(exc), "screen": snap.text, "body": snap.body}
