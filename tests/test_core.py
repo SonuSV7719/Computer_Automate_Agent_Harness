@@ -72,9 +72,9 @@ def test_cv_elements_show_confidence():
 def test_expectations(engine):
     snap = engine.see()
     assert expectation.check("text:Ready", snap)
-    assert expectation.check("gone:Saved INV", snap)
+    assert expectation.check("gone:Saved INV-", snap)
     assert expectation.check("window:invoice entry && value:Vendor=Select...", snap)
-    assert not expectation.check("text:Saved INV", snap)
+    assert not expectation.check("text:Saved INV-", snap)
     with pytest.raises(ValueError):
         expectation.parse("nonsense")
 
@@ -90,7 +90,7 @@ def test_action_reports_changes_and_checks_expectation(engine):
 def test_failed_expectation_is_reported_not_raised(engine):
     snap = engine.see()
     idx = next(e.index for e in snap.elements if e.name == "Save")
-    result = engine.act("click", idx, expect="text:Saved INV", timeout=0.2)
+    result = engine.act("click", idx, expect="text:Saved INV-", timeout=0.2)
     assert not result["ok"] and result["expect"]["met"] is False
 
 
