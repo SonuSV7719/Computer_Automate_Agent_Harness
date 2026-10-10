@@ -221,7 +221,10 @@ def create_app(store: Optional[Store] = None, llm=None, auth_mode: Optional[str]
     def llm_proxy(system: str = Body(...), user_text: str = Body(..., alias="user"), schema: dict = Body(...),
                   dev: dict = Depends(device)) -> dict:
         """Gemini for a paired agent: the learn and heal prompts are built on the agent."""
-        reply = gemini().json(system, user_text, schema)
+        try:
+            reply = gemini().json(system, user_text, schema)
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc)) from None
         store.add("llm_calls", {"device_id": dev["id"], "uid": dev["uid"], "at": time.time(),
                                 "chars": len(system) + len(user_text)})
         return reply

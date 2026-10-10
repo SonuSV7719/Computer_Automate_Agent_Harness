@@ -11,7 +11,7 @@ import time
 from typing import Optional
 
 from .core import expect as expectation
-from .core import fingerprint
+from .core import fingerprint, textmatch
 from .core.diff import diff
 from .core.elements import Element, Snapshot, WindowInfo
 from .core.serialize import serialize
@@ -20,6 +20,16 @@ _DIGITS = re.compile(r"\d+")
 SETTLE_TIMEOUT = 1.2
 POLL = 0.08
 ELEMENTLESS = {"key", "text"}
+
+
+def _new_text(before: Snapshot, after: Snapshot) -> list[str]:
+    """Text that is on screen after an action and was not there before, status text first."""
+    def texts(snap: Snapshot) -> dict[str, str]:
+        return {e.name: e.role for e in snap.elements if e.name and e.role in ("text", "listitem", "statusbar")}
+
+    old, new = texts(before), texts(after)
+    added = [name for name in new if name not in old]
+    return sorted(added, key=lambda name: new[name] != "text")
 
 
 class StaleSnapshot(Exception):
@@ -219,6 +229,7 @@ class Engine:
             element = before.get(index)
             fp = fingerprint.make(element, before)
             route = self.driver.perform(element, action, value)
+            self._verify_value(element, action, value)
 
         if expect or settle:
             after, met = self._settle(expect, timeout, cv)
@@ -236,6 +247,8 @@ class Engine:
             self.trace.append(step)
         return {
             "ok": ok,
+            "step": step,
+            "new_text": _new_text(before, after) if after else [],
             "route": route,
             "ms": round(ms, 1),
             "snapshot": (after or before).id,
@@ -243,6 +256,15 @@ class Engine:
             "changes": diff(before, after) if after else [],
             "element": element.to_dict() if element else None,
         }
+
+    def _verify_value(self, element: Element, action: str, value: Optional[str]) -> None:
+        """A typed or selected value must actually be in the field afterwards."""
+        read = getattr(self.driver, "read_value", None)
+        if read is None or action not in ("type", "select") or element.masked or element.source != "tree":
+            return
+        shown = read(element)
+        if shown is not None and textmatch.squash(shown) != textmatch.squash(value or ""):
+            raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
 
     # ---- recording -----------------------------------------------------
     def record_start(self) -> None:

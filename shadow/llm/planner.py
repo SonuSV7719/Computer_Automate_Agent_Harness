@@ -33,14 +33,16 @@ You operate a desktop application for a user, one action at a time, to achieve t
 
 {SCREEN_FORMAT}
 
-Reply with exactly one next action as JSON.
+Reply with exactly one next action as JSON. Every reply must have "action".
+- "action": what to do. Choose one the element lists under "actions". "type" replaces the
+  field's content, "append" adds to it, "select" chooses a dropdown option or list item (put
+  the option text in "value"). "key" presses a key or combination such as "enter" or "ctrl+s"
+  and needs no index. Use "done" when the goal is fully achieved or cannot be achieved.
 - "index": the element to act on. Use only an index that appears on the current screen.
-- "action": one the element lists under "actions". "type" replaces the field's content,
-  "append" adds to it, "select" chooses a dropdown option or list item (put the option text
-  in "value"). "key" presses a key or combination such as "enter" or "ctrl+s" and needs no index.
 - "value": the text to type, the option to select, or the key to press.
-- "expect": what must be true on screen afterwards. Give this for every action that submits,
-  saves or navigates. Forms: "text:Saved INV-1" (this text is visible), "gone:Saving" (this
+- "expect": what will be newly true on screen afterwards. Give this for every action that
+  submits, saves or navigates, and not for typing or selecting (those are verified for you).
+  It must not already be true now. Forms: "text:Saved INV-1" (this text is visible), "gone:Saving" (this
   text is no longer visible), "window:Invoice" (window title contains this),
   "value:Amount=120" (the element named Amount holds 120). Quote text you expect to appear
   exactly, including identifiers from the goal.
@@ -48,14 +50,14 @@ Reply with exactly one next action as JSON.
   It is stored with the step and used later to repair it if the application changes.
 - "irreversible": true only for steps that cannot be undone, such as paying, posting, sending
   or deleting.
-- "done": true when the goal is fully achieved and nothing more should be done. Then give
-  "result" with a one-sentence summary and omit the action.
+- "result": only with action "done": a one-sentence summary of what was achieved.
 
 Rules:
 - One action per reply. Never invent an index.
 - Fill fields before pressing the button that submits them.
-- If the application shows an error or refuses the task, stop: set "done" true and explain
+- If the application shows an error or refuses the task, stop: use action "done" and explain
   in "result", starting with "FAILED:".
+- Check the screen before finishing: use "done" only when the screen shows the goal was met.
 - Do not repeat an action that already succeeded."""
 
 HEAL_SYSTEM = f"""\
@@ -82,16 +84,16 @@ Prefer "escalate" over a guess. A wrong repair is worse than stopping."""
 LEARN_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "done": {"type": "BOOLEAN"},
+        "action": {"type": "STRING", "enum": ACTIONS + ["done"]},
         "result": {"type": "STRING"},
         "index": {"type": "INTEGER"},
-        "action": {"type": "STRING", "enum": ACTIONS},
         "value": {"type": "STRING"},
         "expect": {"type": "STRING"},
         "intent": {"type": "STRING"},
         "irreversible": {"type": "BOOLEAN"},
     },
-    "required": ["done"],
+    "required": ["action"],
+    "propertyOrdering": ["intent", "action", "index", "value", "expect", "irreversible", "result"],
 }
 
 HEAL_SCHEMA = {

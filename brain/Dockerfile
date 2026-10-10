@@ -6,7 +6,7 @@ WORKDIR /srv
 COPY brain/requirements.txt /srv/requirements.txt
 RUN pip install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
 # The brain reuses the agent's Gemini client and prompts, nothing else from the agent.
-COPY shadow/__init__.py /srv/shadow/__init__.py
+COPY shadow/__init__.py shadow/net.py /srv/shadow/
 COPY shadow/llm /srv/shadow/llm
 COPY brain /srv/brain
 # Cloud Run sets PORT. One worker: long-polling agents are woken in-process.

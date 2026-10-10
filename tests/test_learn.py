@@ -5,6 +5,8 @@ what is recorded). They do not check the quality of Gemini's own decisions.
 """
 import re
 
+import pytest
+
 from fake import FakeInvoiceDriver
 
 from shadow.core.skill import compile_trace, render_code
@@ -81,7 +83,7 @@ def test_model_sees_the_goal_the_screen_and_what_already_happened(engine):
     assert "GOAL\nEnter invoice INV-9001" in first and "(nothing yet)" in first
     assert 'input "Invoice No" = ""  actions: type' in first
     _, third = llm.prompts[2]
-    assert "1. type input" in third and "'INV-9001'" in third and "-> ok." in third
+    assert "1. type input" in third and "'INV-9001'" in third and "-> performed." in third
 
 
 def test_an_invented_index_is_reported_back_and_the_model_recovers(engine, driver):
@@ -99,7 +101,7 @@ def test_application_refusal_ends_learning_as_failed(driver):
     assert not result["ok"] and result["status"] == "failed"
     assert result["error"].startswith("FAILED:")
     assert driver.saved == []
-    assert result["steps"] == 3  # the Save click that did not show its result is not in the trace
+    assert result["steps"] == 4  # the Save click happened, so it is in the trace; nothing is compiled
 
 
 def test_learning_stops_after_repeated_unusable_replies(engine):
@@ -146,3 +148,66 @@ def test_document_extraction_keeps_only_the_skills_own_inputs():
     values = planner.extract_params(ExtractLlm(), {"invoice_no": "INV-1", "amount": "10"},
                                     "Invoice INV-77 ... Total due 88.50")
     assert values == {"invoice_no": "INV-77", "amount": "88.50"}
+
+
+class WrongGuessLlm(ScriptedLlm):
+    """Like a real model on a bad day: predicts a result for Save that is wrong or already true."""
+
+    def __init__(self, guess, **kw):
+        super().__init__(**kw)
+        self.guess = guess
+
+    def json(self, system, user, schema, files=None):
+        reply = super().json(system, user, schema, files)
+        if reply.get("action") == "click":
+            reply["expect"] = self.guess
+        if reply.get("action") in ("type", "select"):
+            reply["expect"] = "value:Some Old Label=" + reply["value"]  # fragile and redundant
+        return reply
+
+
+@pytest.mark.parametrize("guess", ["text:Invoice stored OK", "text:Ready", ""])
+def test_a_performed_step_is_recorded_with_what_the_screen_really_showed(engine, driver, guess):
+    """A wrong, already-true or missing prediction must not drop the step or weaken its check."""
+    result = learn(direct(engine), WrongGuessLlm(guess), "Enter invoice INV-9001")
+    assert result["ok"] and result["steps"] == 4
+    save = result["trace"][-1]
+    assert save["action"] == "click" and save["expect"] == "text:Saved INV-9001"  # observed, and quotes the input
+    assert all(step["expect"] is None for step in result["trace"][:3])  # typed values are verified by the harness
+
+    skill = compile_trace(result["trace"], "enter invoice")
+    assert "expect=f'text:Saved {invoice_no}'" in render_code(skill)
+    replay = run_skill(skill, render_code(skill), direct(engine), {"invoice_no": "INV-9002", "amount": "9000"})
+    assert replay["status"] == "needs_human"  # the over-limit invoice is caught by that check
+
+
+def test_an_empty_repair_is_rejected(engine, driver):
+    result = learn(direct(engine), ScriptedLlm(), "Enter invoice INV-9001")
+    skill = compile_trace(result["trace"], "enter invoice")
+    replay = run_skill(skill, render_code(skill), direct(engine), {"invoice_no": "INV-9", "amount": "9000"},
+                       lambda packet: {"decision": "update_expect", "expect": "", "llm": True})
+    assert replay["status"] == "needs_human" and replay["patches"] == []
+
+
+def test_a_right_retarget_with_a_stale_check_keeps_both_repairs(engine, driver):
+    """v2 renames the field AND the app's wording changes: retarget first, then fix the check."""
+    result = learn(direct(engine), ScriptedLlm(), "Enter invoice INV-9001")
+    skill = compile_trace(result["trace"], "enter invoice")
+    skill.steps[0]["expect"] = skill.steps[0]["expect_template"] = "value:Invoice No=INV-9001"
+    skill.steps[0]["expect_template"] = "value:Invoice No={invoice_no}"
+    driver.variant = "v2"
+
+    def healer(packet):
+        if packet["step"] == 0 and packet["failure"] == "locator":
+            return {"decision": "retarget", "index": index_of(packet["screen"], 'input "Invoice number"'), "llm": True}
+        if packet["step"] == 0:
+            return {"decision": "update_expect", "expect": "value:Invoice number=INV-9", "llm": True}
+        return {"decision": "retarget", "index": index_of(packet["screen"], 'button "Submit"'), "llm": True}
+
+    replay = run_skill(skill, render_code(skill), direct(engine), {"invoice_no": "INV-9", "amount": "5"}, healer)
+    assert replay["ok"], replay["error"]
+    assert [(p["kind"], p["step"]) for p in replay["patches"]] == [("retarget", 0), ("expect", 0), ("retarget", 3)]
+    again = run_skill(replay["healed"], render_code(replay["healed"]), direct(engine),
+                      {"invoice_no": "INV-10", "amount": "6"})
+    assert again["ok"] and again["llm_calls"] == 0
+    assert [row.split(" | ")[0] for row in driver.saved[-2:]] == ["INV-9", "INV-10"]  # typed once each, not twice

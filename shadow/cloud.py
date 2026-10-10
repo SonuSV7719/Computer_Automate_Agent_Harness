@@ -11,10 +11,10 @@ import os
 import platform
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
+
+from . import net
 
 HOME = Path(os.environ.get("SHADOW_HOME", Path.home() / ".shadow"))
 DEVICE_FILE = "device.json"
@@ -40,25 +40,16 @@ class BrainLink:
 
     # ---- http ----------------------------------------------------------
     def _request(self, method: str, path: str, body: Optional[dict] = None, timeout: float = 60.0):
-        data = None if body is None else json.dumps(body).encode()
-        req = urllib.request.Request(self.url + path, data=data, method=method, headers={
-            "Content-Type": "application/json", "Authorization": f"Bearer {self.token}"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            return json.loads(raw) if raw else None
+        return net.request(method, self.url + path, body, {"Authorization": f"Bearer {self.token}"}, timeout)
 
     @staticmethod
     def pair(url: str, code: str, name: str = "") -> dict:
         """Exchange a pairing code from the web harness for this device's token."""
-        body = json.dumps({"code": code.strip().upper(), "name": name or platform.node()}).encode()
-        req = urllib.request.Request(url.rstrip("/") + "/v1/pair/claim", data=body, method="POST",
-                                     headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                reply = json.loads(resp.read())
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")
-            raise RuntimeError(f"pairing failed ({exc.code}): {detail}") from None
+            reply = net.request("POST", url.rstrip("/") + "/v1/pair/claim",
+                                {"code": code.strip().upper(), "name": name or platform.node()}, timeout=30)
+        except net.HttpError as exc:
+            raise RuntimeError(f"pairing failed ({exc.status}): {exc.body}") from None
         device = {"url": url.rstrip("/"), "token": reply["token"], "device_id": reply["device_id"]}
         HOME.mkdir(parents=True, exist_ok=True)
         (HOME / DEVICE_FILE).write_text(json.dumps(device, indent=2), encoding="utf-8")

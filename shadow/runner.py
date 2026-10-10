@@ -54,6 +54,7 @@ class Runner:
         # Skills that never touched a vision-read element replay on the tree alone.
         self.cv = None if any(v["fingerprint"].get("source") != "tree" for v in skill.locators.values()) else False
         self.patches: list[dict] = []
+        self._pending: dict[int, tuple] = {}  # step -> a retarget whose action ran but whose check failed
         self.events: list[dict] = []
         self.llm_calls = 0
         self._n = 0
@@ -161,6 +162,12 @@ class Runner:
                     "ms": round((time.perf_counter() - started) * 1000, 1), "locator": outcome.get("locator"),
                     "route": outcome.get("route"), "healed": heals > 0})
 
+    def _commit_retarget(self, n: int, el_id: str, new_fp: dict, reason: str) -> None:
+        old = self.locators[el_id]["fingerprint"]
+        self.locators[el_id]["fingerprint"] = new_fp
+        self.patches.append({"kind": "retarget", "step": n, "el": el_id, "reason": reason, "fingerprint": new_fp,
+                             "before": describe_fp(old), "after": describe_fp(new_fp)})
+
     def _apply(self, decision: dict, packet: dict, ref, action, value, spec, timeout) -> dict:
         """Validate and execute a healer's decision. Never trusts it blindly."""
         kind = decision.get("decision")
@@ -168,11 +175,12 @@ class Runner:
         reason = decision.get("reason", "")
 
         if kind == "update_expect":
-            new_spec = decision.get("expect") or ""
+            new_spec = (decision.get("expect") or "").strip()
 
             def run(e):
                 try:
-                    expectation.parse(new_spec)
+                    if not expectation.parse(new_spec):
+                        raise ValueError("an empty expectation would check nothing")
                 except ValueError as exc:
                     return {"status": "expect", "detail": str(exc)}
                 snap = e.see()
@@ -183,6 +191,9 @@ class Runner:
 
             outcome = self.call(run)
             if outcome["status"] == "ok":
+                pending = self._pending.pop(n, None)
+                if pending is not None:  # the earlier retarget was right; only its check was stale
+                    self._commit_retarget(*pending)
                 self.patches.append({"kind": "expect", "step": n, "expect": new_spec, "reason": reason,
                                      "params": self.params, "before": spec, "after": new_spec})
             else:
@@ -214,17 +225,16 @@ class Runner:
                     after = e.see()
                     return {"status": "action", "detail": str(exc), "screen": after.text, "body": after.body}
                 if not result["ok"]:
-                    return {"status": "expect", "detail": f"expected result not seen: {spec}",
-                            "screen": e.snapshot.text, "body": e.snapshot.body}
+                    return {"status": "expect", "detail": f"the action ran on [{index}] but the expected result "
+                                                          f"was not seen: {spec}",
+                            "screen": e.snapshot.text, "body": e.snapshot.body, "fingerprint": new_fp}
                 return {"status": "ok", "locator": "healed", "route": result["route"], "fingerprint": new_fp}
 
             outcome = self.call(run)
             if outcome["status"] == "ok":
-                old = self.locators[ref.id]["fingerprint"]
-                self.locators[ref.id]["fingerprint"] = outcome["fingerprint"]
-                self.patches.append({"kind": "retarget", "step": n, "el": ref.id, "reason": reason,
-                                     "fingerprint": outcome["fingerprint"],
-                                     "before": describe_fp(old), "after": describe_fp(outcome["fingerprint"])})
+                self._commit_retarget(n, ref.id, outcome["fingerprint"], reason)
+            elif outcome["status"] == "expect" and outcome.get("fingerprint"):
+                self._pending[n] = (n, ref.id, outcome["fingerprint"], reason)
             return outcome
 
         return {"status": packet["failure"], "detail": f"healer gave an unusable decision: {decision}",

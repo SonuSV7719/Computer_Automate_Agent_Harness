@@ -241,6 +241,15 @@ class WindowsDriver:
             points.append((round(l + (r - l) * fx / 1000), round(t + (b - t) * fy / 1000)))
         return points
 
+    def read_value(self, e: Element) -> Optional[str]:
+        """The value a field holds right now, or None if it cannot be read."""
+        if "value" not in e.patterns or e.handle is None:
+            return None
+        try:
+            return str(e.handle.GetCurrentPropertyValue(UIA.UIA_ValueValuePropertyId) or "").rstrip("\r\n")
+        except Exception:
+            return None
+
     def _current_value(self, e: Element) -> str:
         try:
             return str(e.handle.GetCurrentPropertyValue(UIA.UIA_ValueValuePropertyId) or "").strip()
