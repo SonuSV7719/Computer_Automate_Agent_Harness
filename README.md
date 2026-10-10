@@ -123,7 +123,7 @@ shadow learn "Enter invoice INV-1042 for Contoso Supplies, amount 1200, then sav
 | `shadow windows` / `target <query>` | List windows / choose the one to work on |
 | `shadow see` | The window as indexed text |
 | `shadow act <index> <action> [value] --expect ... --intent ...` | One action, checked |
-| `shadow key <combo>` | Press keys, e.g. `ctrl+s` |
+| `shadow key <combo>` / `shadow text "<string>"` | Press keys, e.g. `ctrl+s` / type into whatever has focus |
 | `shadow record start` / `record save <name>` | Record actions and compile them |
 | `shadow learn "<goal>" --name <name>` | Gemini performs the task once; it is compiled |
 | `shadow run <skill> -p name=value [--heal auto\|host\|off]` | Replay with no LLM |
@@ -172,11 +172,12 @@ How each required technology is used:
 ## Testing
 
 ```
-pytest                                  # 74 tests, any OS, no desktop needed
+pytest                                  # 75 tests, any OS, no desktop needed
 bash tests/live/run_live.sh             # real WinForms app: record, replay, UI change, heal, exception
 bash tests/live/run_live_cv.sh          # real Tk app with no element names: the vision path end to end
 bash tests/live/run_live_stack.sh       # web request -> brain -> paired agent -> real app
 bash tests/live/run_live_gemini.sh      # real Gemini: learn, replay, heal, exception, document
+bash tests/live/run_live_excalidraw.sh  # excalidraw.com: draw, label, find the object from pixels, click it
 (cd dashboard && firebase emulators:exec --only firestore --project demo-shadow "python -m pytest ../tests/test_store.py")
 ```
 
@@ -185,6 +186,7 @@ What is and is not covered:
 - **Covered on real Windows apps:** reading, acting, recording, compiling, replay, healing through the CLI, the vision path, a browser page with a canvas (form through the tree; drag, click-at and a pixel-only button on the canvas), and the web harness driven in Chrome.
 - **Covered with real Gemini** (`run_live_gemini.sh`, plus manual runs): learning on a tree-backed app, on the vision-only app, and on a browser page with a canvas; healing a changed UI; reading a text document into inputs. Reading PDFs and images through the web harness has not been tried.
 - **Covered with a scripted stand-in for Gemini:** the unit tests and the full-stack script, so they run without a key.
+- **Covered on excalidraw.com:** the toolbar is read from the page and the stacked canvases become one region; a rectangle is drawn with a drag and labelled; the handwritten label is read from the canvas with its position; clicking it by index selects the object, and dragging it moves it. Each action there takes 2-4 s because the canvas is re-read after it.
 - **Covered on the Firestore emulator:** the brain's storage layer.
 - **Not yet run:** deployment to Google Cloud, and the sandbox container end to end.
 
@@ -192,7 +194,7 @@ What is and is not covered:
 
 - Windows is the full platform. Linux (X11) is supported as pixels only, for the sandbox. macOS is not supported.
 - OCR misreads happen, mostly on small digits. Text read by OCR is matched with look-alike characters folded together (9/g, 0/O, 1/l), and each such element shows its confidence.
-- Vision finds inputs, buttons, checkboxes with a label, and text. It does not name icons that carry no text.
+- Vision finds inputs, buttons, checkboxes with a label, and text. It does not name icons that carry no text, so on a whiteboard an unlabelled shape is reachable only by position (`click_at`), not by index.
 - A post-condition is taken from what appeared on screen when the step was taught. If the model marks a step irreversible and its confirmation does not appear, the run stops for a person without asking Gemini.
 - A window must not be minimised. Clicking an element that exists only as pixels moves the real mouse and brings the window to the front.
 - Elevated windows need the daemon to run as administrator. The Windows secure desktop cannot be automated.

@@ -62,6 +62,8 @@ def _is_hole(e: Element) -> bool:
 def _is_backdrop(e: Element, nodes: list[Element]) -> bool:
     """True when other tree elements sit on top of this surface. Browsers put an empty
     full-page pane behind the document; it is not a hole, the page is described elsewhere."""
+    if e.role == "image" or e.actions:
+        return False  # a canvas the page draws on, even when toolbars float over it
     ancestors = set()
     node = e.parent
     while node is not None:
@@ -220,6 +222,18 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
                 stats["named"] += 1
     if not list(_content(root)):
         holes.append(root)  # no content nodes at all: read the whole client area
+    # Whiteboards stack several canvases of the same size; they are one surface. Keep the
+    # topmost (last in the tree) and hide the rest.
+    by_box: dict = {}
+    for hole in holes:
+        by_box.setdefault(hole.box, []).append(hole)
+    holes = []
+    tree_order = {id(node): position for position, node in enumerate(root.walk())}
+    for same in by_box.values():
+        same.sort(key=lambda h: tree_order.get(id(h), -1))
+        for extra in same[:-1]:
+            extra.offscreen = True
+        holes.append(same[-1])
 
     # 3. Holes: detect controls from pixels.
     for hole in holes:
@@ -286,11 +300,13 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
             explained.cv_confirmed = True
             stats["confirmed"] += 1
             continue
-        home = root
-        for e in nodes:  # smallest first
-            if e.role not in NAMELESS_CONTROLS and e.role != "input" and _center_in(ln.box, e.box):
-                home = e
-                break
+        home = next((h for h in sorted(holes, key=lambda h: h.area) if _center_in(ln.box, h.box)), None)
+        if home is None:
+            home = root
+            for e in nodes:  # smallest first
+                if e.role not in NAMELESS_CONTROLS and e.role != "input" and visible(e)                         and _center_in(ln.box, e.box):
+                    home = e
+                    break
         if any(c.source == "cv" and iou(c.box, ln.box) > OVERLAP for c in home.children):
             continue
         text = Element(role="text", name=ln.text, box=ln.box, source="cv", confidence=ln.conf,

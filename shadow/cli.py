@@ -152,7 +152,10 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("key", help="press a key or combination, e.g. ctrl+s")
     k.add_argument("combo")
 
-    for p in (a, k):
+    tx = sub.add_parser("text", help="type text into whatever has focus (e.g. a label being edited on a canvas)")
+    tx.add_argument("string")
+
+    for p in (a, k, tx):
         p.add_argument("--snapshot", type=int, help="snapshot the index came from")
         p.add_argument("--expect", help="post-condition, e.g. 'text:Saved' or 'window:Invoice'")
         p.add_argument("--timeout", type=float, default=3.0)
@@ -231,10 +234,10 @@ def main(argv: list[str] | None = None) -> int:
         reply = call("/see", {"elements": args.elements})
         return _finish(reply, as_json or args.elements, reply.get("text", ""))
 
-    if args.cmd in ("act", "key"):
-        body = {"action": args.action if args.cmd == "act" else "key",
+    if args.cmd in ("act", "key", "text"):
+        body = {"action": args.action if args.cmd == "act" else args.cmd,
                 "index": getattr(args, "index", None),
-                "value": args.value if args.cmd == "act" else args.combo,
+                "value": args.value if args.cmd == "act" else (args.combo if args.cmd == "key" else args.string),
                 "snapshot": args.snapshot, "expect": args.expect, "timeout": args.timeout,
                 "intent": args.intent}
         reply = call("/act", body)

@@ -266,3 +266,28 @@ def test_positions_inside_an_element_use_a_0_to_1000_grid():
         WindowsDriver._points(region, "1200,10")
     with pytest.raises(ValueError):
         WindowsDriver._points(region, "50")
+
+
+def test_stacked_canvases_with_a_floating_toolbar_are_one_region():
+    """Excalidraw's layout: two full-size canvases on top of each other, toolbar buttons over them."""
+    root = Element(role="window", name="Whiteboard - Browser", box=(0, 0, 1000, 800), root_hwnd=1)
+    doc = Element(role="document", name="Whiteboard", box=(0, 80, 1000, 800), parent=root, root_hwnd=1)
+    static = Element(role="image", box=(0, 80, 1000, 800), actions=["click"], parent=doc, root_hwnd=1)
+    interactive = Element(role="image", box=(0, 80, 1000, 800), actions=["click"], parent=doc, root_hwnd=1)
+    tools = [Element(role="button", name=name, box=(400 + 50 * i, 100, 440 + 50 * i, 140), actions=["click"],
+                     parent=doc, root_hwnd=1) for i, name in enumerate(["Selection", "Rectangle", "Text"])]
+    doc.children = [static, interactive, *tools]
+    root.children = [doc]
+    assert needs_cv([root])  # the toolbar floating over the canvas does not make it a backdrop
+
+    image = np.full((800, 1000, 3), 255, np.uint8)
+    lines = [Line("Invoice Box", (450, 420, 560, 445), 0.99), Line("Rectangle", (402, 110, 438, 130), 0.9)]
+    merge([root], root.box, image, lines)
+    window = WindowInfo(hwnd=1, title="Whiteboard - Browser", process="chrome.exe", pid=1, box=root.box)
+    _, body, elements = serialize([root], window, 1)
+
+    assert body.count("region (no tree") == 1
+    label = next(e for e in elements if e.name == "Invoice Box")
+    assert label.source == "cv" and label.parent is interactive and label.center == (505, 432)
+    assert 'text "Invoice Box" (at 505,489, cv 0.99)' in body  # with its position inside the region
+    assert body.count('"Rectangle"') == 1  # the toolbar caption read by OCR is the tree's own button

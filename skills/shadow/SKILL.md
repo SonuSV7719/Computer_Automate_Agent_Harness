@@ -56,6 +56,11 @@ WINDOW "Invoice Entry - Acme ERP" (erp.exe) | snapshot: 7 | focused: [1] | dialo
 | `drag` | `x1,y1 x2,y2 ...` | Regions only; more points draw a path |
 
 `shadow key <combo>` presses keys with no element, e.g. `shadow key ctrl+s`, `shadow key enter`.
+`shadow text "<string>"` types into whatever has focus, e.g. a label being edited on a canvas.
+
+On a whiteboard such as Excalidraw: click a tool in the toolbar, `drag` on the region to draw
+the shape, `shadow key enter` then `shadow text "Label"` then `shadow key esc` to label it.
+The label then appears inside the region as text you can click by its index.
 
 ## Always state the expected result
 
