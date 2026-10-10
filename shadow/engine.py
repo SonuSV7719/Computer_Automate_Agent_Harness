@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from typing import Optional
 
@@ -28,8 +29,12 @@ class StaleSnapshot(Exception):
 class Engine:
     def __init__(self, driver=None, perceiver=None, cv: bool = True) -> None:
         if driver is None:
-            from .drivers.windows import WindowsDriver
-            driver = WindowsDriver()
+            if sys.platform == "win32":
+                from .drivers.windows import WindowsDriver
+                driver = WindowsDriver()
+            else:
+                from .drivers.linux import LinuxDriver
+                driver = LinuxDriver()
         self.driver = driver
         self.cv_enabled = cv and os.environ.get("SHADOW_CV", "1") != "0"
         self._perceiver = perceiver

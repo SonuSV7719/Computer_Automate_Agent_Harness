@@ -298,16 +298,23 @@ Measure and display, per run: seconds and LLM calls. Expected shape: first run s
 
 ## 18. Repo layout
 
+As built (the agent and core live in one `shadow` package):
+
 ```
-agent/       daemon, CLI, Windows and Linux drivers
-core/        merge, serialiser, fingerprints, codegen, replay, heal client
-brain/       Cloud Run API, Gemini prompts, Firestore access
-sandbox/     Dockerfile and target apps
-dashboard/   chat harness (React, Firebase)
-skills/      SKILL.md for host agents
-docs/        architecture, licences, deck assets
-tests/       recorded trees and screenshots, merge and replay tests
+shadow/            the agent: daemon, CLI, engine, runner, learn loop, cloud link
+  core/            elements, screen text, fingerprints, post-conditions, skills, diff
+  cv/              OCR, incremental reading, pixel box detection, merge into the tree
+  drivers/         Windows (UI Automation) and Linux (X11, pixels only)
+  llm/             Gemini client and the learn / heal / extract prompts
+brain/             Cloud Run API: pairing, command relay, Gemini proxy, Firestore store
+sandbox/           Dockerfile and the Tk demo app for the judges' link
+dashboard/         web harness (static, Firebase Hosting)
+skills/shadow/     SKILL.md for host agents
+deploy/            Cloud Build config and the deploy script
+tests/             unit tests, fixtures, test apps, and live end-to-end scripts
 ```
+
+See README.md for what is built, measured and tested, and what is not yet run.
 
 ## 19. Schedule
 

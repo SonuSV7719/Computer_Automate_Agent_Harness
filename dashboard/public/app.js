@@ -126,6 +126,7 @@ async function loadDevices() {
   const wanted = state.device && state.device.view ? state.device.view : "";
   view.classList.toggle("hidden", !wanted);
   if (wanted && view.getAttribute("src") !== wanted) view.setAttribute("src", wanted);
+  $("demo-controls").classList.toggle("hidden", !(state.device && state.device.shared));
   if (!devices.length) banner("No device yet. Press “Pair a PC” and run the command it shows on your Windows PC.");
   else if (state.device && !state.device.online) banner("The selected device is offline. Start it with: shadow daemon start");
   else banner("");
@@ -305,6 +306,16 @@ $("target-btn").onclick = () => guarded($("target-btn"), async () => {
   const result = await command("target", { query: $("target").value });
   say(result.ok ? "" : "bad", result.ok ? "Now working on: " + result.window.title : result.error);
 });
+
+for (const variant of ["v1", "v2"]) {
+  $("demo-" + variant).onclick = () => guarded(null, async () => {
+    const result = await command("demo_app", { variant });
+    say(result.ok ? "" : "bad", result.ok
+      ? (variant === "v1" ? "The demo app was restarted in its original layout."
+                          : "The demo app was “updated”: Invoice No is now Invoice number, Save is now Submit, and fields moved. Run the skill again to watch it heal.")
+      : result.error);
+  });
+}
 
 const drop = $("drop");
 ["dragenter", "dragover"].forEach((name) => drop.addEventListener(name, (e) => {

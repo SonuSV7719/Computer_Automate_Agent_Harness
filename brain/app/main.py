@@ -31,7 +31,7 @@ PAIR_CODE_TTL = 600
 SANDBOX_ID = "sandbox"
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no look-alike characters
 USER_COMMANDS = {"windows", "target", "see", "act", "learn", "run", "heal", "skills", "skill",
-                 "rollback", "extract", "runs"}
+                 "rollback", "extract", "runs", "demo_app"}
 MAX_UPLOAD = 8 * 1024 * 1024
 
 

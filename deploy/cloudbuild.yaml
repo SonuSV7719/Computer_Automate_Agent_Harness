@@ -1,0 +1,13 @@
+# Builds both images with Cloud Build. Run from the repository root:
+#   gcloud builds submit --config deploy/cloudbuild.yaml --substitutions=_REPO=REGION-docker.pkg.dev/PROJECT/shadow
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -f, brain/Dockerfile, -t, "${_REPO}/brain:latest", .]
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -f, sandbox/Dockerfile, -t, "${_REPO}/sandbox:latest", .]
+images:
+  - "${_REPO}/brain:latest"
+  - "${_REPO}/sandbox:latest"
+options:
+  machineType: E2_HIGHCPU_8
+timeout: 1800s

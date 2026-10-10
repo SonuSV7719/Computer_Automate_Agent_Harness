@@ -333,7 +333,38 @@ def _handle_command(command: dict) -> dict:
         return extract(args["skill"], args["text"])
     if kind == "runs":
         return runs_list(None)
+    if kind == "demo_app":
+        return demo_app(args.get("variant", "v1"))
     return {"ok": False, "kind": "invalid", "error": f"unknown command type '{kind}'"}
+
+
+def demo_app(variant: str) -> dict:
+    """Sandbox only: restart the demo app, as itself (v1) or after an "update" (v2)."""
+    import subprocess
+    script = os.environ.get("SHADOW_DEMO_APP")
+    if not script:
+        return {"ok": False, "kind": "invalid", "error": "this device has no demo app"}
+    if variant not in ("v1", "v2"):
+        return {"ok": False, "kind": "invalid", "error": "variant must be v1 or v2"}
+    done = subprocess.run([script, variant], capture_output=True, text=True, timeout=30)
+    if done.returncode != 0:
+        return {"ok": False, "kind": "error", "error": done.stderr.strip() or "the demo app did not start"}
+    reply = _retarget()
+    return {"ok": True, "variant": variant, "window": reply.get("window")}
+
+
+def _retarget() -> dict:
+    """Point the engine at the window named in SHADOW_TARGET, waiting for it to appear."""
+    wanted = os.environ.get("SHADOW_TARGET")
+    if not wanted:
+        return {}
+    reply = {}
+    for _ in range(40):
+        reply = target(wanted)
+        if reply.get("ok"):
+            break
+        time.sleep(0.25)
+    return reply
 
 
 def _connect() -> None:
@@ -377,6 +408,7 @@ def main() -> None:
         init_thread()
         try:
             _worker.submit(_get_engine).result()
+            _retarget()
             _get_engine().warm_up()
         except Exception:
             pass  # vision is optional; the first read will report any real problem
