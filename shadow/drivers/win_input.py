@@ -117,6 +117,22 @@ def click(x: int, y: int, button: str = "left", double: bool = False) -> None:
         _send(_mouse(down), _mouse(up))
 
 
+def drag(points: list[tuple[int, int]], steps: int = 12) -> None:
+    """Press at the first point, move through the others, release at the last."""
+    MOUSEEVENTF_MOVE = 0x0001
+    user32.SetCursorPos(*points[0])
+    time.sleep(0.03)
+    _send(_mouse(MOUSEEVENTF_LEFTDOWN))
+    time.sleep(0.03)
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        for i in range(1, steps + 1):
+            user32.SetCursorPos(int(x0 + (x1 - x0) * i / steps), int(y0 + (y1 - y0) * i / steps))
+            _send(_mouse(MOUSEEVENTF_MOVE))  # a zero-distance move, so the app receives a move event
+            time.sleep(0.006)
+    time.sleep(0.03)
+    _send(_mouse(MOUSEEVENTF_LEFTUP))
+
+
 def scroll(x: int, y: int, notches: int) -> None:
     """Positive notches scroll up, negative scroll down."""
     user32.SetCursorPos(int(x), int(y))

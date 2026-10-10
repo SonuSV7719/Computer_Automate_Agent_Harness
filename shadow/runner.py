@@ -16,8 +16,8 @@ from .core.skill import Skill, apply_patches
 from .skill_api import ElRef
 
 ELEMENT_ACTIONS = ("click", "doubleclick", "rightclick", "type", "append", "select", "toggle",
-                   "expand", "collapse", "focus", "scroll")
-ALWAYS_ALLOWED = {"click", "doubleclick", "rightclick", "focus", "scroll"}
+                   "expand", "collapse", "focus", "scroll", "click_at", "drag")
+ALWAYS_ALLOWED = {"click", "doubleclick", "rightclick", "focus", "scroll", "click_at", "drag"}
 LOCATE_TIMEOUT = 1.5
 POLL = 0.05
 

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web Invoice and Whiteboard</title>
+<style>
+  body { font: 16px "Segoe UI", sans-serif; margin: 24px; background: #f4f4f4; }
+  label { display: inline-block; width: 120px; }
+  input, select { font: inherit; width: 220px; padding: 4px; margin: 6px 0; }
+  button { font: inherit; padding: 6px 18px; margin: 8px 8px 8px 0; }
+  #status, #board-status { margin: 8px 0; font-weight: 600; }
+  canvas { background: #fff; border: 1px solid #333; display: block; }
+</style>
+</head>
+<body>
+<h1>Invoice entry</h1>
+<div><label for="inv">Invoice No</label><input id="inv" name="invoice"></div>
+<div><label for="vendor">Vendor</label>
+  <select id="vendor"><option>Select...</option><option>Northwind Paper</option>
+  <option>Contoso Supplies</option><option>Fabrikam Tools</option></select></div>
+<div><label for="amount">Amount</label><input id="amount" name="amount"></div>
+<button id="save">Save</button><button id="clear">Clear</button>
+<div id="status" role="status">Ready</div>
+<ul id="saved" aria-label="Saved invoices"></ul>
+
+<h2>Whiteboard</h2>
+<div id="board-status" role="status">Strokes: 0</div>
+<canvas id="board" width="640" height="260"></canvas>
+
+<script>
+const $ = id => document.getElementById(id);
+$("save").onclick = () => {
+  const inv = $("inv").value.trim(), vendor = $("vendor").value, amount = parseFloat($("amount").value);
+  if (!inv) return $("status").textContent = "Error: invoice number is required";
+  if (vendor === "Select...") return $("status").textContent = "Error: choose a vendor";
+  if (isNaN(amount)) return $("status").textContent = "Error: amount must be a number";
+  if (amount > 5000) return $("status").textContent = "Blocked: amount " + amount + " exceeds purchase order limit 5000";
+  const li = document.createElement("li");
+  li.textContent = inv + " | " + vendor + " | " + amount;
+  $("saved").appendChild(li);
+  $("status").textContent = "Saved " + inv;
+  $("inv").value = ""; $("amount").value = ""; $("vendor").selectedIndex = 0;
+};
+$("clear").onclick = () => { $("inv").value = ""; $("amount").value = ""; $("vendor").selectedIndex = 0;
+                             $("status").textContent = "Ready"; };
+
+// A canvas whiteboard: everything inside it is pixels, with no accessibility tree.
+const board = $("board"), ctx = board.getContext("2d");
+let strokes = 0, clicks = 0, drawing = false, moved = false;
+function paintTools() {
+  ctx.font = "18px Segoe UI"; ctx.fillStyle = "#000"; ctx.strokeStyle = "#000"; ctx.lineWidth = 1;
+  ctx.strokeRect(16, 14, 110, 34); ctx.fillText("Rectangle", 30, 37);
+  ctx.strokeRect(140, 14, 90, 34); ctx.fillText("Arrow", 162, 37);
+  ctx.fillText("Draw below this line", 260, 37);
+  ctx.beginPath(); ctx.moveTo(0, 62); ctx.lineTo(640, 62); ctx.stroke();
+}
+paintTools();
+const at = e => { const r = board.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+board.onmousedown = e => { drawing = true; moved = false; ctx.lineWidth = 3; ctx.strokeStyle = "#1565c0";
+                           ctx.beginPath(); ctx.moveTo(...at(e)); };
+board.onmousemove = e => { if (drawing) { moved = true; ctx.lineTo(...at(e)); ctx.stroke(); } };
+window.onmouseup = e => {
+  if (!drawing) return;
+  drawing = false;
+  if (moved) strokes++; else clicks++;
+  $("board-status").textContent = "Strokes: " + strokes + (clicks ? ", clicks: " + clicks : "");
+};
+</script>
+</body>
+</html>

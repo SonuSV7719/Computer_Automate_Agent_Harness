@@ -226,6 +226,21 @@ class WindowsDriver:
                 win_input.click(*e.center)
         time.sleep(0.03)
 
+    @staticmethod
+    def _points(e: Element, value: Optional[str]) -> list[tuple[int, int]]:
+        """Positions inside an element, written as "x,y x,y ..." on a 0-1000 grid."""
+        l, t, r, b = e.box
+        points = []
+        for token in (value or "").replace(";", " ").split():
+            x, sep, y = token.partition(",")
+            if not sep:
+                raise ValueError(f'bad position "{token}"; write x,y with each from 0 to 1000')
+            fx, fy = float(x), float(y)
+            if not (0 <= fx <= 1000 and 0 <= fy <= 1000):
+                raise ValueError(f'position "{token}" is outside 0-1000')
+            points.append((round(l + (r - l) * fx / 1000), round(t + (b - t) * fy / 1000)))
+        return points
+
     def _current_value(self, e: Element) -> str:
         try:
             return str(e.handle.GetCurrentPropertyValue(UIA.UIA_ValueValuePropertyId) or "").strip()
@@ -294,6 +309,19 @@ class WindowsDriver:
                                           UIA.IUIAutomationSelectionItemPattern, lambda p: p.Select()):
                     return "uia.select"
             return self._mouse_click(e)
+
+        if action in ("click_at", "drag"):
+            points = self._points(e, value)
+            if action == "click_at" and len(points) != 1:
+                raise ValueError('click_at needs one position, e.g. "500,500"')
+            if action == "drag" and len(points) < 2:
+                raise ValueError('drag needs at least two positions, e.g. "100,100 400,300"')
+            win_input.focus_window(e.root_hwnd)
+            if action == "click_at":
+                win_input.click(*points[0])
+            else:
+                win_input.drag(points)
+            return "mouse"
 
         if action in ("doubleclick", "rightclick"):
             return self._mouse_click(e, double=action == "doubleclick",

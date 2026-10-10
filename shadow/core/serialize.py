@@ -94,7 +94,7 @@ def describe(e: Element, with_index: bool = True) -> str:
     flags = []
     if e.checked:
         flags.append(e.checked)
-    if e.source == "merged" and e.confidence is not None:
+    if e.source == "merged" and e.confidence is not None and e.role != "region":
         flags.append(f"read by ocr {e.confidence:.2f}")
     if e.selected:
         flags.append("selected")
@@ -120,7 +120,12 @@ def describe(e: Element, with_index: bool = True) -> str:
             shown = " | ".join(_clip(o, 30) for o in options[:12])
             flags.append(f"options: {shown}" + (f" | +{len(options) - 12} more" if len(options) > 12 else ""))
     if e.role == "region":
-        flags.append("no tree, read by CV")
+        flags.append(f"no tree, read by CV, {e.box[2] - e.box[0]}x{e.box[3] - e.box[1]} px")
+    elif e.source == "cv" and e.parent is not None and e.parent.role == "region" and e.parent.area:
+        # Where it sits inside its region, on the same 0-1000 grid click_at and drag use.
+        pl, pt, pr, pb = e.parent.box
+        cx, cy = e.center
+        flags.append(f"at {round(1000 * (cx - pl) / (pr - pl))},{round(1000 * (cy - pt) / (pb - pt))}")
     if e.source == "cv":
         flags.append(f"cv {e.confidence:.2f}" if e.confidence is not None else "cv")
     if flags:

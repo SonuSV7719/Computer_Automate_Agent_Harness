@@ -167,7 +167,7 @@ def test_pixels_alone_become_labelled_inputs_and_buttons(ocr):
     stats = merge([root], window.box, image, ocr.read(image))
     _, body, elements = serialize([root], window, 1)
     assert stats["holes"] == 1 and stats["inputs"] == 3
-    assert "region (no tree, read by CV)" in body
+    assert "region (no tree, read by CV, " in body
     inputs = [e for e in elements if e.role == "input"]
     assert [textmatch.squash(e.title) for e in inputs] == ["invoiceno", "vendorname", "amount"]
     assert all(e.source == "cv" and e.actions == ["click", "type"] for e in inputs)
@@ -203,3 +203,66 @@ def test_tree_boxes_are_named_by_ocr_and_tree_text_is_not_duplicated(ocr):
     _, body, _ = serialize([root], window, 1)
     assert body.count('"Clear"') == 1
     assert 'input "Invoice No"' in body.replace("InvoiceNo", "Invoice No")
+
+
+# ---- browsers and canvases ----------------------------------------------------
+def _page_with(*extra):
+    """A browser-like tree: a full-page backdrop pane behind a document with named controls."""
+    root = Element(role="window", name="Page - Browser", box=(0, 0, 900, 700), root_hwnd=1)
+    backdrop = Element(role="pane", box=(0, 80, 900, 700), parent=root, root_hwnd=1)
+    doc = Element(role="document", name="Page", box=(0, 80, 900, 700), parent=root, root_hwnd=1)
+    doc.children = [
+        Element(role="input", name="Invoice No", box=(150, 100, 400, 130), actions=["type"], value="", parent=doc),
+        Element(role="button", name="Save", box=(150, 150, 230, 185), actions=["click"], parent=doc),
+        *extra,
+    ]
+    for child in extra:
+        child.parent = doc
+    root.children = [backdrop, doc]
+    return root, backdrop, doc
+
+
+def test_a_fully_described_web_page_needs_no_vision():
+    from shadow.cv.merge import cv_areas
+    root, _backdrop, _doc = _page_with()
+    assert not needs_cv([root])  # the empty pane behind the page is a backdrop, not a hole
+    assert cv_areas([root], root.box) == []
+
+
+def test_a_canvas_becomes_a_region_and_only_it_is_read():
+    import cv2
+
+    from shadow.cv.merge import cv_areas
+    canvas = Element(role="image", box=(100, 300, 740, 560), actions=["click"], root_hwnd=1)
+    root, _backdrop, doc = _page_with(canvas)
+    assert needs_cv([root])
+    assert cv_areas([root], root.box) == [(96, 296, 744, 564)]
+
+    image = np.full((700, 900, 3), 244, np.uint8)
+    image[300:560, 100:740] = 255  # the white canvas
+    cv2.rectangle(image, (116, 314), (226, 348), (0, 0, 0), 1)  # a "Rectangle" tool drawn on it
+    lines = [Line("Rectangle", (132, 322, 210, 340), 0.99), Line("Draw here", (360, 322, 440, 340), 0.98)]
+    stats = merge([root], root.box, image, lines)
+    window = WindowInfo(hwnd=1, title="Page - Browser", process="chrome.exe", pid=1, box=root.box)
+    _, body, elements = serialize([root], window, 1)
+
+    assert stats["holes"] == 1
+    assert canvas.role == "region" and canvas.actions == ["click_at", "drag"] and canvas.index >= 0
+    tool = next(e for e in elements if e.name == "Rectangle")
+    assert tool.role == "button" and tool.source == "cv"  # a box on a white canvas is not an input
+    assert "region (no tree, read by CV, 640x260 px)  actions: click_at, drag" in body
+    import re
+    at = re.search(r'button "Rectangle" \(at (\d+),(\d+), cv 0.99\)  actions: click', body)
+    assert at and abs(int(at.group(1)) - 111) <= 5 and abs(int(at.group(2)) - 119) <= 8, body
+    assert body.count('"Save"') == 1  # the page's own button is untouched
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows driver")
+def test_positions_inside_an_element_use_a_0_to_1000_grid():
+    from shadow.drivers.windows import WindowsDriver
+    region = Element(role="region", box=(100, 200, 500, 400))
+    assert WindowsDriver._points(region, "0,0 1000,1000 500,500") == [(100, 200), (500, 400), (300, 300)]
+    with pytest.raises(ValueError):
+        WindowsDriver._points(region, "1200,10")
+    with pytest.raises(ValueError):
+        WindowsDriver._points(region, "50")

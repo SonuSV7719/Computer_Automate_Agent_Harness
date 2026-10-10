@@ -19,7 +19,7 @@ PREFIX = {
     "menuitem": "mnu", "tabitem": "tab", "listitem": "itm", "treeitem": "itm", "text": "txt",
     "document": "doc", "icon": "ico", "image": "img", "splitbutton": "btn",
 }
-VALUE_ACTIONS = {"type", "append", "select"}
+VALUE_ACTIONS = {"type", "append", "select"}  # their value becomes a parameter; positions stay fixed
 ELEMENTLESS = {"key", "text"}
 
 

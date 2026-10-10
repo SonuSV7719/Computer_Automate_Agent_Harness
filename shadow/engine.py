@@ -86,7 +86,7 @@ class Engine:
         """Fill what the tree cannot describe from the pixels."""
         import numpy as np
 
-        from .cv.merge import known_boxes, merge
+        from .cv.merge import cv_areas, known_boxes, merge
         from .cv.perceive import Perceiver
 
         if self._perceiver is None:
@@ -95,7 +95,13 @@ class Engine:
         grab = getattr(self.driver, "capture_window", None)
         shot = grab(hwnd, info.box) if grab else self.driver.capture(info.box)
         image = np.ascontiguousarray(np.asarray(shot)[:, :, ::-1])
-        lines = self._perceiver.lines(hwnd, image, known_boxes(roots, info.box))
+        areas = cv_areas(roots, info.box)
+        reading = image
+        if areas is not None:  # blank out everything the tree already describes
+            reading = np.full_like(image, 255)
+            for l, t, r, b in areas:
+                reading[t:b, l:r] = image[t:b, l:r]
+        lines = self._perceiver.lines(hwnd, reading, known_boxes(roots, info.box))
         self.cv_stats = merge(roots, info.box, image, lines)
         self.cv_stats.update(self._perceiver.last, ms=round((time.perf_counter() - started) * 1000, 1))
 

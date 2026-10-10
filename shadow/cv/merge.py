@@ -54,8 +54,28 @@ def _is_leaf(e: Element) -> bool:
 
 
 def _is_hole(e: Element) -> bool:
+    """A large surface with nothing inside it in the tree: a canvas, a remote desktop view."""
     l, t, r, b = e.box
-    return e.role in SURFACES and _is_leaf(e) and not e.actions and r - l >= HOLE_MIN_W and b - t >= HOLE_MIN_H
+    return e.role in SURFACES and _is_leaf(e) and r - l >= HOLE_MIN_W and b - t >= HOLE_MIN_H
+
+
+def _is_backdrop(e: Element, nodes: list[Element]) -> bool:
+    """True when other tree elements sit on top of this surface. Browsers put an empty
+    full-page pane behind the document; it is not a hole, the page is described elsewhere."""
+    ancestors = set()
+    node = e.parent
+    while node is not None:
+        ancestors.add(id(node))
+        node = node.parent
+    on_top = 0
+    for other in nodes:
+        if other is e or id(other) in ancestors or not (other.name or other.actions):
+            continue
+        if _center_in(other.box, e.box):
+            on_top += 1
+            if on_top >= 2:
+                return True
+    return False
 
 
 def needs_cv(roots: list[Element]) -> bool:
@@ -69,11 +89,36 @@ def needs_cv(roots: list[Element]) -> bool:
     for e in nodes:
         if e.name:
             continue
-        if e.role in NAMELESS_CONTROLS or _is_hole(e):
+        if e.role in NAMELESS_CONTROLS:
             return True
-        if e.role in SURFACES and _is_leaf(e) and e.area >= 12 * 12 and not e.actions:
+        if e.role in SURFACES and _is_leaf(e) and e.area >= 12 * 12 and not _is_backdrop(e, nodes):
             return True
     return False
+
+
+def cv_areas(roots: list[Element], window_box: Box):
+    """Image-space boxes where vision is needed, or None for the whole window.
+
+    Vision reads only what the tree cannot describe: holes and unnamed controls. In a
+    browser that is the canvas, not the page around it."""
+    if not roots:
+        return None
+    root = roots[0]
+    nodes = list(_content(root))
+    if not nodes:
+        return None
+    ox, oy = window_box[0], window_box[1]
+    w, h = window_box[2] - ox, window_box[3] - oy
+    areas = []
+    for e in nodes:
+        if e.name:
+            continue
+        wanted = e.role in NAMELESS_CONTROLS or (
+            e.role in SURFACES and _is_leaf(e) and e.area >= 12 * 12 and not _is_backdrop(e, nodes))
+        if wanted:
+            l, t, r, b = e.box
+            areas.append((max(0, l - ox - 4), max(0, t - oy - 4), min(w, r - ox + 4), min(h, b - oy + 4)))
+    return areas
 
 
 def known_boxes(roots: list[Element], window_box: Box) -> list[Box]:
@@ -85,19 +130,30 @@ def known_boxes(roots: list[Element], window_box: Box) -> list[Box]:
     for e in _content(roots[0]):
         if e.name or not _is_leaf(e) or _is_hole(e):
             continue
-        if e.role in NAMELESS_CONTROLS or e.role in SURFACES:
+        if e.role in NAMELESS_CONTROLS or (e.role in SURFACES and not e.actions):
             l, t, r, b = e.box
             if 12 <= b - t <= 64 and r - l >= 12:
                 out.append((l - ox, t - oy, r - ox, b - oy))
     return out
 
 
-def _input_like(image: np.ndarray, local: Box) -> bool:
+def _input_like(image: np.ndarray, local: Box, needs_contrast: bool = False) -> bool:
+    """A light, wide, single-line surface. With needs_contrast it must also stand out from
+    what surrounds it: a bordered box on a white canvas is a shape or a button, not a field."""
     w, h = local[2] - local[0], local[3] - local[1]
     if not (14 <= h <= 64 and w >= 50 and w / h >= 1.8):
         return False
-    white, _mean = interior_brightness(image, local)
-    return white >= 0.55
+    white, inside = interior_brightness(image, local)
+    if white < 0.55:
+        return False
+    if needs_contrast:
+        l, t, r, b = local
+        ring = 6
+        outside = [image[max(0, t - ring):max(0, t - 2), l:r], image[b + 2:b + ring, l:r]]
+        values = [strip.mean() for strip in outside if strip.size]
+        if values and abs(inside - sum(values) / len(values)) < 12:
+            return False
+    return True
 
 
 def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[Line]) -> dict:
@@ -140,10 +196,14 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
     # 2. Unnamed surfaces: an input, a piece of text, or a hole to read from pixels.
     holes = []
     for e in nodes:
-        if e.name or e.role not in SURFACES or not _is_leaf(e) or e.actions:
+        if e.name or e.role not in SURFACES or not _is_leaf(e):
+            continue
+        if _is_backdrop(e, nodes):
             continue
         if _is_hole(e):
             holes.append(e)
+        elif e.actions:
+            continue
         elif _input_like(image, local(e.box)):
             found = take(e.box)
             e.role, e.source = "input", "merged"
@@ -172,6 +232,8 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
         for box in sorted(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1])):
             w, h = box[2] - box[0], box[3] - box[1]
             element = None
+            if any(o is not hole and (o.name or o.actions) and iou(o.box, box) > OVERLAP for o in nodes):
+                continue  # the tree already has this element; the tree wins
             if 10 <= w <= 28 and abs(w - h) <= 5:
                 label = next((ln for ln in pending
                               if 0 <= ln.box[0] - box[2] <= 16 and ln.box[1] < box[3] and ln.box[3] > box[1]), None)
@@ -180,7 +242,7 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
                     ticked = dark_fraction(image, local(box)) > 0.12
                     element = Element(role="checkbox", name=label.text, box=box, actions=["click"],
                                       checked="checked" if ticked else "unchecked", confidence=label.conf)
-            elif _input_like(image, local(box)):
+            elif _input_like(image, local(box), needs_contrast=True):
                 found = take(box)
                 element = Element(role="input", box=box, value=_join(found), actions=["click", "type"],
                                   confidence=min((ln.conf for ln in found), default=0.7))
@@ -200,6 +262,8 @@ def merge(roots: list[Element], window_box: Box, image: np.ndarray, lines: list[
                 stats["cv_elements"] += 1
         if hole is not root and hole.role in SURFACES:
             hole.role = "region"
+            hole.source = "merged"
+            hole.actions = ["click_at", "drag"]  # positions inside it are given as x,y from 0 to 1000
         mark(hole)
 
     # 4. Remaining text: explained by the tree, or a new text element.
