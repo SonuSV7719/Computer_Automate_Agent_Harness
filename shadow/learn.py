@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional
 
-from .engine import StaleSnapshot
+from .engine import Halted, StaleSnapshot
 from .llm import planner
 from .llm.client import LlmClient
 
@@ -82,6 +82,8 @@ def learn(call: Callable, client: LlmClient, goal: str, max_steps: int = MAX_STE
                 break
         else:
             result.update(error=f"goal not reached within {max_steps} steps")
+    except Halted as exc:
+        result.update(status="stopped", error=str(exc))
     finally:
         trace = call(lambda e: e.record_stop())
     result.update(trace=trace, llm_calls=llm_calls, steps=len(trace), history=history,

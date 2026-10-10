@@ -26,6 +26,14 @@ class StaleSnapshot(Exception):
     pass
 
 
+class Halted(Exception):
+    """The user pressed the kill switch. Nothing may touch the desktop until resumed."""
+
+
+class NotAllowed(LookupError):
+    """The window belongs to an application outside the allowlist."""
+
+
 class Engine:
     def __init__(self, driver=None, perceiver=None, cv: bool = True) -> None:
         if driver is None:
@@ -37,6 +45,10 @@ class Engine:
                 driver = LinuxDriver()
         self.driver = driver
         self.cv_enabled = cv and os.environ.get("SHADOW_CV", "1") != "0"
+        self.halted = False
+        # SHADOW_ALLOW=erp.exe,chrome.exe limits the agent to those applications.
+        self.allow = {name.strip().casefold() for name in os.environ.get("SHADOW_ALLOW", "").split(",")
+                      if name.strip()}
         self._perceiver = perceiver
         self.cv_stats: dict = {}
         self.target: Optional[int] = None
@@ -48,6 +60,18 @@ class Engine:
     # ---- windows -------------------------------------------------------
     def windows(self) -> list[WindowInfo]:
         return self.driver.list_windows()
+
+    def halt(self) -> None:
+        self.halted = True
+
+    def resume(self) -> None:
+        self.halted = False
+
+    def _check_allowed(self, window: WindowInfo) -> WindowInfo:
+        if self.allow and window.process.casefold() not in self.allow:
+            raise NotAllowed(f"{window.process or 'this application'} is not in the allowlist "
+                             f"({', '.join(sorted(self.allow))})")
+        return window
 
     def set_target(self, query: str) -> WindowInfo:
         """Pick the window to work on by title, process name or handle."""
@@ -62,6 +86,7 @@ class Engine:
             match = next((w for w in windows if wanted in w.process.casefold()), None)
         if match is None:
             raise LookupError(f"no window matches '{query}'")
+        self._check_allowed(match)
         self.target = match.hwnd
         self.snapshot = None
         return match
@@ -74,6 +99,7 @@ class Engine:
         if not same:
             raise LookupError(f"the window for this skill is not open ({window.get('process')}: {pattern})")
         match = next((w for w in same if _DIGITS.sub("#", w.title) == pattern), same[0])
+        self._check_allowed(match)
         self.target = match.hwnd
         self.snapshot = None
         return match
@@ -125,7 +151,7 @@ class Engine:
         cv=False skips it, which replay uses for skills that never touched a CV element."""
         started = time.perf_counter()
         hwnd = self._hwnd()
-        info = self.driver.window_info(hwnd)
+        info = self._check_allowed(self.driver.window_info(hwnd))
         roots = self.driver.tree(hwnd)
         if not roots:
             raise LookupError(f"window '{info.title}' has no readable UI tree")
@@ -165,6 +191,8 @@ class Engine:
             cv: Optional[bool] = None) -> dict:
         """Perform one action. With settle=False and no expectation the call returns
         straight after the action, which is what replay uses between checkpoints."""
+        if self.halted:
+            raise Halted("stopped by the user; run `shadow resume` to continue")
         if expect:
             expectation.parse(expect)  # fail before touching the UI
         started = time.perf_counter()
@@ -198,8 +226,10 @@ class Engine:
             after, met = None, None
         ms = (time.perf_counter() - started) * 1000
         ok = met is not False
+        secret = element is not None and element.masked
         step = {
-            "action": action, "value": value, "fingerprint": fp, "expect": expect,
+            # A password is never written to a trace or a skill; it is asked for at run time.
+            "action": action, "value": "" if secret else value, "fingerprint": fp, "expect": expect,
             "intent": intent, "route": route, "ok": ok, "ms": round(ms, 1),
         }
         if self.recording and ok:

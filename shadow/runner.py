@@ -13,6 +13,7 @@ from typing import Callable, Optional
 from .core import expect as expectation
 from .core import fingerprint
 from .core.skill import Skill, apply_patches
+from .engine import Halted
 from .skill_api import ElRef
 
 ELEMENT_ACTIONS = ("click", "doubleclick", "rightclick", "type", "append", "select", "toggle",
@@ -249,6 +250,8 @@ def run_skill(skill: Skill, code: str, call: EngineCall, params: Optional[dict] 
         result.update(ok=False, status="needs_human", error=exc.reason, packet=exc.packet)
     except LookupError as exc:
         result.update(ok=False, status="failed", error=str(exc))
+    except Halted as exc:
+        result.update(ok=False, status="stopped", error=str(exc))
     steps = [e for e in runner.events if e["type"] == "step"]
     result.update(
         skill=skill.name, version=skill.version, ms=round((time.perf_counter() - started) * 1000, 1),

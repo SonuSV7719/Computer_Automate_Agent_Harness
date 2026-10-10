@@ -3,7 +3,7 @@
 Only the standard library is imported here so each call starts in milliseconds.
 
 Exit codes: 0 ok, 1 error, 2 expected result not seen, 3 stale snapshot,
-4 run paused for a heal decision, 5 run needs a person.
+4 run paused for a heal decision, 5 run needs a person, 6 stopped by the kill switch.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from pathlib import Path
 PORT = int(os.environ.get("SHADOW_PORT", "47600"))
 BASE = f"http://127.0.0.1:{PORT}"
 HOME = Path(os.environ.get("SHADOW_HOME", Path.home() / ".shadow"))
-EXIT = {"expect": 2, "stale": 3, "needs_heal": 4, "needs_human": 5}
+EXIT = {"expect": 2, "stale": 3, "needs_heal": 4, "needs_human": 5, "stopped": 6}
 
 
 def _request(path: str, body: dict | None = None, timeout: float = 900.0) -> dict:
@@ -199,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--name", default="")
 
     sub.add_parser("status", help="daemon, pairing and Gemini status")
+    sub.add_parser("stop", help="kill switch: stop touching the desktop now (also Ctrl+Alt+F12)")
+    sub.add_parser("resume", help="allow actions again after a stop")
 
     args = parser.parse_args(argv)
     as_json = args.json
@@ -317,6 +319,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("pair needs --url (or set SHADOW_BRAIN_URL)")
         reply = call("/pair", {"url": args.url, "code": args.code, "name": args.name})
         return _finish(reply, as_json, f"paired as device {reply.get('device_id')} with {reply.get('url')}")
+
+    if args.cmd in ("stop", "resume"):
+        reply = call("/" + args.cmd)
+        return _finish(reply, as_json, "stopped: no action will run until `shadow resume`"
+                       if args.cmd == "stop" else "resumed")
 
     if args.cmd == "status":
         reply = call("/status")

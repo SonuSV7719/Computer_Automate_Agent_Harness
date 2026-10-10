@@ -42,13 +42,15 @@ def _get_engine():
 
 def run(fn: Callable[[Any], dict]) -> dict:
     """Run fn(engine) on the engine thread and turn exceptions into error replies."""
-    from .engine import StaleSnapshot
+    from .engine import Halted, StaleSnapshot
 
     def call():
         try:
             return {"ok": True, **fn(_get_engine())}
         except StaleSnapshot as exc:
             return {"ok": False, "kind": "stale", "error": str(exc)}
+        except Halted as exc:
+            return {"ok": False, "kind": "stopped", "error": str(exc)}
         except (LookupError, ValueError) as exc:
             return {"ok": False, "kind": "invalid", "error": str(exc)}
         except Exception as exc:  # the daemon must survive any single bad call
@@ -170,10 +172,48 @@ def skills_diff(name: str = Body(...), old: int = Body(...), new: int = Body(...
         return {"ok": False, "kind": "invalid", "error": str(exc)}
 
 
+@app.post("/stop")
+def stop() -> dict:
+    """Kill switch: nothing touches the desktop again until `shadow resume`."""
+    from .runs import MANAGER
+    _get_engine().halt()  # a plain flag, safe to set from any thread
+    for state in MANAGER.runs.values():
+        if state.status == "needs_heal":
+            try:
+                state.answer({"decision": "escalate", "reason": "stopped by the user"})
+            except LookupError:
+                pass
+    return {"ok": True, "stopped": True}
+
+
+@app.post("/resume")
+def resume() -> dict:
+    _get_engine().resume()
+    return {"ok": True, "stopped": False}
+
+
+def _hotkey_listener() -> None:
+    """Ctrl+Alt+F12 anywhere on the desktop stops the agent at once (Windows)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    MOD_ALT, MOD_CONTROL, VK_F12, WM_HOTKEY = 0x0001, 0x0002, 0x7B, 0x0312
+    if not user32.RegisterHotKey(None, 1, MOD_CONTROL | MOD_ALT, VK_F12):
+        return  # another program owns the combination; `shadow stop` still works
+    message = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+        if message.message == WM_HOTKEY:
+            stop()
+
+
 @app.post("/run")
 def run_start(skill: str = Body(...), params: dict = Body(default_factory=dict),
               heal: str = Body("auto"), wait: float = Body(120.0)) -> dict:
     from .runs import MANAGER
+    _get_engine().resume()  # starting a run is an explicit decision to continue
     try:
         state = MANAGER.start(_store(), skill, params, heal, lambda fn: _worker.submit(lambda: fn(_get_engine())).result())
     except (LookupError, ValueError) as exc:
@@ -243,6 +283,7 @@ def learn_task(goal: str = Body(...), name: str = Body(...), description: str = 
     if client is None:
         return {"ok": False, "kind": "invalid",
                 "error": "no Gemini access: set GEMINI_API_KEY or pair with the cloud (`shadow pair`)"}
+    _get_engine().resume()  # starting to learn is an explicit decision to continue
 
     def on_event(event: dict) -> None:
         if command:
@@ -414,6 +455,7 @@ def main() -> None:
             pass  # vision is optional; the first read will report any real problem
 
     threading.Thread(target=warm, name="warm-up", daemon=True).start()
+    threading.Thread(target=_hotkey_listener, name="kill-switch", daemon=True).start()
     try:
         _connect()
     except Exception as exc:  # the daemon works offline; say why the cloud is not connected

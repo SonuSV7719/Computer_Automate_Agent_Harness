@@ -26,7 +26,7 @@ class RunState:
         self.skill = skill
         self.version = version
         self.params = params
-        self.status = "running"  # running | needs_heal | done | needs_human | failed
+        self.status = "running"  # running | needs_heal | done | needs_human | failed | stopped
         self.packet: Optional[dict] = None
         self.result: Optional[dict] = None
         self.events: list[dict] = []
@@ -78,7 +78,7 @@ class RunState:
                                                     "patches", "error", "new_version")})
             if self.status == "needs_human":
                 out.update(kind="needs_human", packet=self.result.get("packet"))
-            elif self.status == "failed":
+            elif self.status in ("failed", "stopped"):
                 out.update(kind="error")
         return out
 
