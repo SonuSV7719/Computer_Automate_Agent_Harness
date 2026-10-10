@@ -4,7 +4,7 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 WORKDIR /srv
 COPY brain/requirements.txt /srv/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --retries 10 --timeout 60 -r requirements.txt
 # The brain reuses the agent's Gemini client and prompts, nothing else from the agent.
 COPY shadow/__init__.py /srv/shadow/__init__.py
 COPY shadow/llm /srv/shadow/llm

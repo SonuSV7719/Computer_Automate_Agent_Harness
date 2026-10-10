@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /srv
 COPY pyproject.toml /srv/pyproject.toml
 COPY shadow /srv/shadow
-RUN pip install --no-cache-dir . rapidocr-onnxruntime opencv-python-headless numpy \
+RUN pip install --no-cache-dir --retries 10 --timeout 60 . rapidocr-onnxruntime opencv-python-headless numpy \
     && python -c "from shadow.cv.ocr import RapidOcr; RapidOcr()"   # fail the build if OCR cannot load
 COPY sandbox /srv/sandbox
 RUN chmod +x /srv/sandbox/entrypoint.sh /srv/sandbox/app.sh
