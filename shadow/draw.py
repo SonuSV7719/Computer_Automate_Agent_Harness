@@ -16,8 +16,9 @@ from .core import textmatch
 DIAGRAM_SYSTEM = """\
 You plan a diagram that will be drawn on a whiteboard: boxes with short labels, and arrows
 between them. Place boxes on a grid with "col" and "row" starting at 0; keep it readable,
-at most 5 columns and 5 rows, and put boxes that follow each other next to each other so
-arrows are short and do not cross boxes. Labels are 1 to 3 words. Reply with JSON:
+at most 4 columns and 4 rows. Every arrow must join boxes in neighbouring cells (left, right,
+above, below or diagonal) so it is short and never passes through another box; never place a
+box between two boxes that are connected to each other. Labels are 1 to 3 words. Reply with JSON:
 {"title": "...", "nodes": [{"id": "api", "label": "API Gateway", "col": 1, "row": 0}, ...],
  "edges": [{"from": "api", "to": "auth"}, ...]}"""
 
@@ -69,7 +70,8 @@ def layout(spec: dict, area: tuple = DRAW_AREA) -> dict[str, tuple[int, int, int
     cols = max(n["col"] for n in spec["nodes"]) + 1
     rows = max(n["row"] for n in spec["nodes"]) + 1
     cell_w, cell_h = (right - left) / cols, (bottom - top) / rows
-    box_w, box_h = min(cell_w * 0.62, 190), min(cell_h * 0.5, 110)
+    # Wide enough that a two-word label fits on one or two lines, never broken mid-word.
+    box_w, box_h = min(cell_w * 0.8, 260), min(cell_h * 0.55, 120)
     boxes = {}
     for n in spec["nodes"]:
         cx, cy = left + cell_w * (n["col"] + 0.5), top + cell_h * (n["row"] + 0.5)
