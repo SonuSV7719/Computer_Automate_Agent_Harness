@@ -1,29 +1,62 @@
+<div align="center">
+
 # Shadow
 
-**Teach a desktop task once. It runs as code from then on. When the application changes, Gemini repairs the one step that broke.**
+**Teach a computer task once. Replay it as code at RPA speed. Let Gemini repair it when the application changes.**
 
-Shadow is a desktop automation engine for Windows. An AI agent performs a task once while Shadow records it, then Shadow compiles the recording into a plain Python file that replays at RPA speed with **no LLM calls**. If a later run fails because the UI changed, the LLM is called for that step only, the fix is saved as a new version, and the run continues.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6.svg)
+![Gemini](https://img.shields.io/badge/AI-Gemini-8E75B2.svg)
+![Google Cloud](https://img.shields.io/badge/cloud-Cloud%20Run%20%C2%B7%20Firestore%20%C2%B7%20Firebase-4285F4.svg)
 
-It works on any window: classic desktop apps, browsers, and surfaces with no structure at all (remote desktop viewers, canvases, whiteboards), because it merges two sources into one element tree: the operating system's UI tree and computer vision on the window's pixels.
+</div>
 
-Built for the Google Cloud AI Builder Cup 2026, theme *Future of Work & Enterprise Productivity*.
+---
 
-## What it looks like
+## Overview
 
-The agent never sees pixels or coordinates. It reads this, and answers with an index:
+Shadow is a desktop automation engine for Windows. An AI agent performs a task once while Shadow records it; Shadow then compiles the recording into a readable Python skill that replays with **no model calls**. When a later run fails because the interface changed, Gemini is asked about that one step only, the repair is validated, saved as a new version, and the run continues.
+
+Shadow works on any window: native desktop applications, web pages in any Chromium browser, and surfaces with no accessible structure at all, such as remote-desktop viewers, canvases and whiteboards. It achieves this by merging two sources into a single element tree: the operating system's UI Automation tree and computer vision on the window's own pixels.
+
+Built for the **Google Cloud AI Builder Cup 2026**, theme *Future of Work & Enterprise Productivity*.
+
+| | First run (Gemini) | Every run after (compiled skill) |
+|---|---|---|
+| 4-step invoice entry | ~14 s, 5 model calls | **~0.55 s, 0 model calls** |
+| After the UI changes | 2 model calls to repair, saved as v2 | back to 0 model calls |
+
+## Contents
+
+- [Key capabilities](#key-capabilities)
+- [How it works](#how-it-works)
+- [Getting started](#getting-started)
+- [Usage](#usage)
+- [Architecture on Google Cloud](#architecture-on-google-cloud)
+- [Performance](#performance)
+- [Testing](#testing)
+- [Security and safety](#security-and-safety)
+- [Project structure](#project-structure)
+- [Project status and limitations](#project-status-and-limitations)
+- [Related work](#related-work)
+- [License](#license)
+
+## Key capabilities
+
+**Understands any window as text a model can act on.** Every element gets an index, role, label, current value, state and the actions it accepts. The model never handles pixels or coordinates; it answers with an index.
 
 ```
 WINDOW "Invoice Entry - Acme ERP" (erp.exe) | snapshot: 7 | focused: [1] | dialog: none | 14 elements, 83 ms
-[0] text "Invoice No"
 [1] input "Invoice No" = "" (focused)  actions: type
 [3] dropdown "Vendor" = "Select..."  actions: select
-[5] input "Amount" = ""  actions: type
 [6] checkbox "Tax inclusive" (unchecked)  actions: click, toggle
 [7] button "Save"  actions: click
-[9] text "Ready"
+[12] region (no tree, read by CV, 802x328 px)  actions: click_at, drag
+  [13] button "Rectangle" (at 112,125, cv 1.00)  actions: click
 ```
 
-After one taught run, this file is what executes:
+**Compiles every taught task into code.** Typed and selected values become parameters; each step carries a post-condition.
 
 ```python
 def run(h, invoice_no='INV-1042', vendor='Contoso Supplies', amount='1200'):
@@ -37,184 +70,252 @@ def run(h, invoice_no='INV-1042', vendor='Contoso Supplies', amount='1200'):
     h.click(el("btn_save"), expect=f'text:Saved {invoice_no}')
 ```
 
-## What it can operate and read
+**Operates every common form control, on the web and on the desktop.** Text, password, email, number, date, multi-line text, fixed and editable dropdowns, multi-select lists, radio buttons, checkboxes, sliders, number spinners, switches and tabs. Legacy WinForms and Win32 controls that only expose MSAA are driven with real clicks and keystrokes, because they accept automation calls without notifying the application.
 
-- **Every common form control, on the web and on the desktop:** text, password, email, number, date, multi-line text, dropdowns (fixed and editable), multi-select lists (`select "English | Tamil"`), radio buttons, checkboxes, sliders and number spinners (`set 70`), switches, tabs. Older WinForms and Win32 controls that only speak MSAA are handled with real clicks and typing, because they accept automation calls without telling the program.
-- **Tables:** HTML tables, desktop data grids (WinForms DataGridView), and details-view lists (Explorer-style). `shadow table` returns columns and rows, following `--next "Next"` across pages or `--scroll` for growing lists, and writes `--csv`.
-- **Repeated items:** product cards, search results, tiles, card panels on the desktop. `shadow items` returns one record per item with title, link, price, other prices, rating, review count, image and buttons, across pages and infinite scroll.
-- **Human actions:** click (with Ctrl, Shift or Alt held), double and triple click, right click, hover, drag one element onto another, drag and click at positions on a canvas, type, keys, scroll. Elements below the fold are scrolled into view first.
-- **Whiteboards:** `shadow draw "architecture of a ride-sharing app"` has Gemini plan boxes and arrows, draws them with the board's own Rectangle and Arrow tools, and checks every label on the canvas afterwards.
-- **Screen context for the model:** besides the indexed screen text, Gemini gets a screenshot of the window with every element boxed and numbered, whenever part of the window is read from pixels (or always, with `SHADOW_SCREENSHOTS=always`).
+**Extracts structured data.** Tables (HTML tables, WinForms DataGridView, Explorer-style details lists) and repeated items (product cards, search results, tiles, desktop card panels), following *Next* pages and infinite scroll, with CSV export.
 
-Measured with the extraction commands: the test page's 23-row orders table across 3 pages in 3.4 s, 18 product cards across 3 pages in 3.7 s, a 40-entry infinite-scroll feed in 24 s; on the desktop app a 23-row data grid across 3 pages in 0.5 s, a 30-row file list in 0.4 s, 14 product card panels across 3 pages in 1.7 s; on books.toscrape.com, 60 books across 3 pages in 21 s (most of it waiting for the pages to load).
+**Acts like a person.** Click with Ctrl, Shift or Alt held, double and triple click, right click, hover, drag one element onto another, drag and click on a canvas, type, keyboard shortcuts and scrolling. Elements out of view are scrolled into view first.
 
-## Measured on this project's test apps
+**Draws on whiteboards.** `shadow draw "<description>"` has Gemini plan a diagram of boxes and arrows, draws it with the board's own tools, then reads the canvas back to confirm every label.
 
-All figures are from the live test scripts in `tests/live/`, on a 12-core Windows 11 laptop at 125% display scaling.
+**Gives the model real screen context.** Alongside the indexed text, Gemini receives a screenshot with every element boxed and numbered whenever part of the window is read from pixels.
 
-| What | Result |
-|---|---|
-| Read a window through the UI tree | 60-100 ms |
-| One action through the UI tree | 6-140 ms |
-| Replay a 4-step skill on a tree-backed app | 0.53-0.69 s, 0 LLM calls |
-| Replay the same task on an app with no element names (vision) | 1.8-3.7 s, 0 LLM calls |
-| First vision read of a window / an unchanged window | about 1-1.4 s / about 0.1 s |
-| Gemini learns a 4-step task from one sentence (`gemini-3.5-flash-lite`) | 11-14 s, 5 LLM calls |
-| Gemini learns a browser form plus a drawing on a canvas | 16-24 s, 6 LLM calls; replays in 1.3-1.8 s, 0 calls |
-| UI change (2 controls renamed and moved) | Gemini healed both with 2 LLM calls in about 5 s, saved as version 2, next replay 0 calls |
-| Invoice over the purchase-order limit | run stops for a person; skill unchanged |
-| Gemini reads a text invoice into the skill's inputs | invoice number, vendor and amount all correct |
-
-So the same task costs 5 LLM calls and about 14 s the first time, and 0 calls and about 0.55 s every time after.
+**Heals safely.** Repairs are validated before use, limited to two attempts, versioned with diffs and rollback, and never applied to irreversible steps or business-rule failures.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    subgraph PC["Windows PC"]
+        A[Target application] -->|UI Automation tree| M[Merged element tree]
+        A -->|window pixels| V[Vision: OCR + box detection] --> M
+        M --> T[Indexed screen text<br/>+ marked screenshot]
+        R[Compiled skill<br/>Python + fingerprints] -->|replay, no model| A
+    end
+    T -->|learn / heal only| G[Gemini]
+    G -->|element index + action| A
+    G -.->|repair saved as new version| R
 ```
-CLOUD (Google Cloud)
-  Brain            Cloud Run      holds the Gemini key, pairs machines, relays commands
-  Storage          Firestore      skills, versions, runs, commands
-  Web harness      Firebase       Hosting + anonymous Auth
-  Sandbox          Cloud Run      a Linux desktop with a demo app, for trying it with no install
-        ▲  indexed screen text (learning and healing only)      │ commands
-        │  outbound connection from the PC                      ▼
-YOUR PC
-  shadow daemon    keeps the UI tree cache and OCR models warm; replays skills locally
-  shadow CLI       a thin client; also what other AI agents call
-```
 
-**One merged tree.** For each window Shadow fetches the UI Automation tree in a single cached call. Where the tree is complete, nothing else runs. Where it is not, vision fills in:
+1. **One merged tree.** The UI Automation tree is fetched in a single cached call. Where it is complete, nothing else runs. Where it is not, vision fills in: unnamed controls are named from the text drawn on them, input-shaped surfaces become inputs, and regions with no tree become `region` elements whose content is detected from pixels. Text the tree already explains is dropped, so nothing appears twice.
+2. **Efficient vision.** Only areas the tree cannot describe are read, using the window's own rendering so overlapping windows do not interfere. After the first pass only changed pixels are re-read; carets are erased and small text is enlarged before OCR.
+3. **Fingerprints, not selectors.** Each step stores several independent ways to find its element: automation ID, role and name, label, ancestor path, neighbours and relative position. A match is accepted only when a second property agrees. Duplicates are told apart by position; anything ambiguous is refused, never guessed.
+4. **Post-conditions.** Steps that save or submit carry an expected result taken from what actually appeared when the task was taught. A check that was already true before the step does not count.
+5. **Validated healing.** A failed step produces a packet with its intent, original fingerprint, the current screen and the failure reason. The healer may retarget, correct the expected wording, or escalate; its answer must pass validation before it is applied.
 
-- a control the tree knows but cannot name gets its name from the text drawn on it;
-- an unnamed surface shaped like an input becomes an input, with its value read by OCR;
-- a region with no tree at all becomes a `region` whose buttons, inputs and text are detected from pixels, and which accepts `click_at` and `drag` on a 0-1000 grid;
-- text the tree already explains is dropped, so nothing appears twice.
+## Getting started
 
-Vision reads only the areas the tree cannot describe (in a browser: the canvas, not the page), reads the window's own content so it is not fooled by a window on top, and after the first pass re-reads only the pixels that changed.
+### Requirements
 
-**Fingerprints, not selectors.** Each recorded step stores several independent ways to find its element: automation ID, role and name, label, ancestor path, neighbours, position relative to the window. At replay a match is accepted only when a second property agrees; two identical candidates are refused, never guessed.
+- Windows 10 or 11
+- Python 3.11 or newer
+- A Gemini API key from [Google AI Studio](https://aistudio.google.com/) (for learning, healing and diagram planning; replay needs no key)
 
-**Post-conditions.** Every step that saves or submits states what must be true afterwards (`text:Saved INV-1042`). Without one, a failure would be silent and healing would never trigger.
+### Install
 
-**Healing with a limit.** A failed step produces a packet (intent, old fingerprint, current screen, reason). The healer may retarget the step, correct the expected wording, or escalate. Its answer is validated before use: the element must accept the action and the post-condition must hold. Two attempts, then a person. Irreversible steps are never auto-healed.
-
-## Quick start (Windows)
-
-Requires Python 3.11 or newer.
-
-```
+```bash
+git clone https://github.com/SonuSV7719/Computer_Automate_Agent_Harness.git
+cd Computer_Automate_Agent_Harness
+python -m venv .venv
+.venv\Scripts\activate
 pip install -e ".[dev]"
-pip install rapidocr-onnxruntime opencv-python-headless numpy google-genai
+pip install rapidocr-onnxruntime opencv-python-headless numpy
+```
 
-shadow windows                      # list open windows
-shadow target "Invoice"             # choose one by title or process
-shadow see                          # read it
+### Configure
+
+Create `%USERPROFILE%\.shadow\.env`:
+
+```ini
+GEMINI_API_KEY=your-key
+# Optional
+SHADOW_GEMINI_MODEL=gemini-3.5-flash-lite   # use gemini-3.8-flash with a billed key
+SHADOW_ALLOW=erp.exe,chrome.exe             # restrict Shadow to these applications
+SHADOW_SCREENSHOTS=auto                     # auto | always | never
+```
+
+The local daemon starts automatically on the first command.
+
+## Usage
+
+### Read and act
+
+```bash
+shadow windows                                   # list open windows
+shadow target "Invoice"                          # choose one by title or process
+shadow see                                       # read it as indexed text
 shadow act 1 type "INV-1042" --intent "Enter the invoice number"
 shadow act 7 click --expect "text:Saved INV-1042" --intent "Save the invoice"
 ```
 
-Record and replay:
+### Teach once, replay as code
 
-```
+```bash
+# Let Gemini perform the task once and compile it
+shadow learn "Enter invoice INV-1042 for Contoso Supplies, amount 1200, then save it." --name enter_invoice
+
+# Or record your own commands
 shadow record start
-...the actions above...
 shadow record save enter_invoice
+
+# Replay with new data: no model calls
 shadow run enter_invoice -p invoice_no=INV-2001 -p amount=75
 ```
 
-Let Gemini teach it. Put `GEMINI_API_KEY=...` in `~/.shadow/.env` (or the environment), or pair with a brain. The default model is `gemini-3.5-flash-lite`, which is fast and works on a free-tier key; with a billed key, `SHADOW_GEMINI_MODEL=gemini-3.8-flash` selects a stronger one (its free tier allows only 5 requests a minute).
+### Extract data
 
+```bash
+shadow table --next "Next" --csv orders.csv          # every row of a paged table
+shadow items --next "Next page" --csv products.csv   # product cards across pages
+shadow items 39 --scroll                             # a list that grows as you scroll
 ```
-shadow learn "Enter invoice INV-1042 for Contoso Supplies, amount 1200, then save it." --name enter_invoice
+
+### Draw a diagram
+
+```bash
+shadow target "Excalidraw"
+shadow draw "architecture of a ride-sharing app"
+shadow draw --spec diagram.json                  # or supply the boxes and arrows yourself
 ```
 
-### Commands
+### Command reference
 
-| Command | Does |
+| Command | Purpose |
 |---|---|
-| `shadow windows` / `target <query>` | List windows / choose the one to work on |
+| `shadow windows` / `target <query>` | List windows; choose the one to work on |
 | `shadow see` | The window as indexed text |
-| `shadow act <index> <action> [value] --expect ... --intent ...` | One action, checked |
-| `shadow key <combo>` / `shadow text "<string>"` | Press keys, e.g. `ctrl+s` / type into whatever has focus |
-| `shadow record start` / `record save <name>` | Record actions and compile them |
-| `shadow learn "<goal>" --name <name>` | Gemini performs the task once; it is compiled |
-| `shadow run <skill> -p name=value [--heal auto\|host\|off]` | Replay with no LLM |
-| `shadow heal <run> --index N \| --expect ... \| --escalate ...` | Answer a paused run |
-| `shadow skills list\|code\|diff\|rollback` | Skills and versions |
-| `shadow runs` | Recent runs with timing and LLM calls |
-| `shadow extract <skill> <file>` | Read a document's text into a skill's inputs |
-| `shadow pair <code> --url <brain>` / `status` | Connect to the web harness |
-| `shadow stop` / `resume` | Kill switch: stop touching the desktop now, and allow it again |
+| `shadow act <index> <action> [value]` | One action, with `--expect` and `--intent` |
+| `shadow key <combo>` / `text "<string>"` | Press keys / type into whatever has focus |
+| `shadow learn "<goal>" --name <skill>` | Gemini performs the task once; it is compiled |
+| `shadow record start` / `record save <skill>` | Record your own actions and compile them |
+| `shadow run <skill> -p name=value` | Replay with no model; `--heal auto\|host\|off` |
+| `shadow heal <run> --index N \| --expect … \| --escalate …` | Answer a paused run |
+| `shadow skills list\|code\|diff\|rollback` | Manage skills and their versions |
+| `shadow table` / `items` | Extract tables or repeated items (`--next`, `--scroll`, `--csv`) |
+| `shadow draw "<description>"` | Plan and draw a diagram on a whiteboard |
+| `shadow extract <skill> <file>` | Read a document into a skill's inputs |
+| `shadow runs` / `status` | Recent runs; daemon, pairing and Gemini status |
+| `shadow pair <code> --url <brain>` | Connect this PC to the web harness |
+| `shadow stop` / `resume` | Kill switch |
 
-### Safety
+Actions: `click`, `doubleclick`, `rightclick`, `tripleclick`, `hover`, `drag_to`, `type`, `append`, `select`, `set`, `toggle`, `expand`, `collapse`, `focus`, `scroll`, `click_at`, `drag`. Exit codes: `0` ok, `1` error, `2` expected result not seen, `3` stale snapshot, `4` run paused for a repair, `5` run needs a person, `6` stopped.
 
-- **Kill switch.** `shadow stop`, or **Ctrl+Alt+F12** anywhere on the desktop, blocks every action at once and ends the current run as stopped. Nothing runs again until `shadow resume` or a new run is started.
-- **Allowlist.** Set `SHADOW_ALLOW=erp.exe,chrome.exe` and the agent refuses to read or act on any other application.
-- **Passwords.** Masked fields are shown as `••••`. A value typed into one is never written to a recording or a skill; it becomes an empty input you supply at run time.
-- **Irreversible steps** (pay, post, send, delete) are never repaired automatically; the run stops for a person.
-- **Never silent.** A step whose expected result does not appear stops the run. A locator that matches two elements is refused.
+### Use from other AI agents
 
-## Use it from another AI agent
+[`skills/shadow/SKILL.md`](skills/shadow/SKILL.md) teaches any agent that can run shell commands (Antigravity, Gemini CLI, Claude Code, OpenCode) to drive Shadow: the read-act-check loop, the screen format, recording, extraction, drawing and how to answer a paused run.
 
-`skills/shadow/SKILL.md` teaches any agent that can run shell commands (Antigravity, Gemini CLI, Claude Code, OpenCode) to drive Shadow: the read-act-check loop, the screen format, recording, and how to answer a paused run. Copy that folder into the agent's skills directory.
+## Architecture on Google Cloud
 
-## The web harness
-
-`dashboard/public` is a static page: describe a task to teach it, run a skill with new inputs, drop a document to fill those inputs, watch each step with its timing, answer a heal, and see the numbers (first run versus replay, LLM calls, heals).
-
-Run everything locally:
-
-```
-python -m brain.local                                  # brain on :8090, memory storage, needs GEMINI_API_KEY
-python -m http.server 8099 -d dashboard/public         # web harness on :8099
-shadow pair <code shown by "Pair a PC"> --url http://127.0.0.1:8090
+```mermaid
+flowchart TB
+    U[Browser] -->|Firebase Hosting + anonymous Auth| W[Web harness]
+    W -->|REST| B[Brain · Cloud Run]
+    B <--> F[(Firestore)]
+    B -->|REST| G[Gemini API]
+    P[Shadow daemon on a Windows PC] -->|outbound long-poll| B
+    S[Sandbox · Cloud Run<br/>Linux desktop + demo app] -->|outbound long-poll| B
 ```
 
-## Deploying to Google Cloud
+| Service | Role |
+|---|---|
+| **Gemini** | Learns a task one indexed element at a time, repairs failed steps from their intent and the current screen (with a marked screenshot when useful), plans diagrams, and reads documents into skill inputs. Never called during replay. |
+| **Cloud Run** | Runs the brain, the only holder of the Gemini key, and the sandbox, a Linux desktop the agent drives so the prototype can be tried with no installation. |
+| **Firestore** | Stores skills with every version and repair, runs with timing and model-call counts, paired devices, and the command queue between the web harness and each agent. Browsers never access it directly. |
+| **Firebase** | Hosts the web harness and signs visitors in anonymously. |
 
-`deploy/deploy.sh` enables the services, creates the Firestore database, stores the Gemini key in Secret Manager, builds both images with Cloud Build, deploys the brain and the sandbox to Cloud Run, and deploys the web harness to Firebase Hosting. Read its header for the four manual steps first. **It has not yet been run against a live project.**
+Agents connect outbound only; the cloud never reaches into a machine. Screenshots stay on the PC except when sent to Gemini for learning or repair.
 
-How each required technology is used:
+To deploy, follow the manual steps in the header of [`deploy/deploy.sh`](deploy/deploy.sh), then run it. To run the whole stack locally:
 
-- **Gemini** learns a task by choosing one indexed element at a time, repairs a failed step from its intent and the current screen, and reads dropped documents into skill inputs. It is not called during replay.
-- **Cloud Run** runs the brain (the only holder of the Gemini key) and the sandbox, a Linux desktop the agent drives so the prototype can be tried with no install.
-- **Firestore** stores skills with every version and heal, runs with their timing and LLM-call counts, paired devices, and the command queue between the web harness and each agent.
-- **Firebase** hosts the web harness and signs visitors in anonymously.
+```bash
+python -m brain.local                              # brain on :8090 with in-memory storage
+python -m http.server 8099 -d dashboard/public     # web harness on :8099
+shadow pair <code from "Pair a PC"> --url http://127.0.0.1:8090
+```
+
+## Performance
+
+Measured with the live test scripts on a 12-core Windows 11 laptop at 125% display scaling.
+
+| Operation | Result |
+|---|---|
+| Read a window through the UI tree | 60–100 ms |
+| One action through the UI tree | 6–140 ms |
+| Replay a 4-step skill (tree-backed application) | 0.53–0.69 s, 0 model calls |
+| Replay a 4-step skill (application with no element names, vision) | 1.8–3.7 s, 0 model calls |
+| Gemini learns a 4-step task from one sentence | 11–14 s, 5 model calls |
+| Gemini learns a browser form plus a canvas drawing | 16–24 s, 6 model calls; replay 1.3–1.8 s |
+| Gemini repairs a changed UI (2 controls renamed and moved) | ~5 s, 2 model calls; next replay 0 calls |
+| Paged table, 23 rows over 3 pages (web / desktop grid) | 3.4 s / 0.5 s |
+| Product cards over 3 pages (web, 18 / desktop, 14) | 3.7 s / 1.7 s |
+| Infinite-scroll list, 40 entries | 24 s |
+| books.toscrape.com, 60 books over 3 pages | 21 s, mostly page loading |
 
 ## Testing
 
-```
-pytest                                  # 103 tests, any OS, no desktop needed
-bash tests/live/run_live.sh             # real WinForms app: record, replay, UI change, heal, exception
-bash tests/live/run_live_cv.sh          # real Tk app with no element names: the vision path end to end
-bash tests/live/run_live_stack.sh       # web request -> brain -> paired agent -> real app
-bash tests/live/run_live_gemini.sh      # real Gemini: learn, replay, heal, exception, document
-bash tests/live/run_live_excalidraw.sh  # excalidraw.com: draw, label, find the object from pixels, click it
+```bash
+pytest                                         # 103 unit tests; any OS, no desktop needed
+bash tests/live/run_live.sh                    # WinForms app: record, replay, UI change, repair, exception
+bash tests/live/run_live_cv.sh                 # Tk app with no element names: the vision path end to end
+bash tests/live/run_live_stack.sh              # web harness -> brain -> paired agent -> real application
+bash tests/live/run_live_gemini.sh             # real Gemini: learn, replay, repair, exception, document
+bash tests/live/run_live_excalidraw.sh         # excalidraw.com: draw, label, find the object from pixels, click it
+bash tests/live/run_live_excalidraw_dupes.sh   # look-alike and duplicate objects
 (cd dashboard && firebase emulators:exec --only firestore --project demo-shadow "python -m pytest ../tests/test_store.py")
 ```
 
-What is and is not covered:
+The live scripts drive real windows with the real mouse and keyboard; run them when the machine is otherwise idle.
 
-- **Covered on real Windows apps:** reading, acting, recording, compiling, replay, healing through the CLI, the vision path, a browser page with a canvas (form through the tree; drag, click-at and a pixel-only button on the canvas), and the web harness driven in Chrome.
-- **Covered with real Gemini** (`run_live_gemini.sh`, plus manual runs): learning on a tree-backed app, on the vision-only app, and on a browser page with a canvas; healing a changed UI; reading a text document into inputs. Reading PDFs and images through the web harness has not been tried.
-- **Covered with a scripted stand-in for Gemini:** the unit tests and the full-stack script, so they run without a key.
-- **Covered on excalidraw.com:** the toolbar is read from the page and the stacked canvases become one region; a rectangle is drawn with a drag and labelled; the handwritten label is read from the canvas with its position; clicking it by index selects the object, and dragging it moves it. Each action there takes 2-4 s because the canvas is re-read after it.
-- **Covered on the Firestore emulator:** the brain's storage layer.
-- **Not yet run:** deployment to Google Cloud, and the sandbox container end to end.
+## Security and safety
 
-## Limits
+- **Kill switch.** `shadow stop`, or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F12</kbd> anywhere, blocks every action immediately.
+- **Application allowlist.** `SHADOW_ALLOW` restricts which applications Shadow may read or operate.
+- **Passwords.** Masked fields are shown as `••••`; typed secrets are never written to recordings or skills.
+- **Irreversible steps.** Payments, postings, sends and deletions are never repaired automatically.
+- **No silent failures.** Unmet post-conditions stop the run; ambiguous matches are refused.
+- **Least exposure.** The Gemini key lives only on the brain or in a local `.env`; Firestore rules deny all browser access.
 
-- Windows is the full platform. Linux (X11) is supported as pixels only, for the sandbox. macOS is not supported.
-- OCR misreads happen, mostly on small digits. Text read by OCR is matched with look-alike characters folded together (9/g, 0/O, 1/l), and each such element shows its confidence.
-- Vision finds inputs, buttons, checkboxes with a label, and text. It does not name icons that carry no text, so on a whiteboard an unlabelled shape is reachable only by position (`click_at`), not by index.
-- A post-condition is taken from what appeared on screen when the step was taught. If the model marks a step irreversible and its confirmation does not appear, the run stops for a person without asking Gemini.
-- A window must not be minimised. Clicking an element that exists only as pixels moves the real mouse and brings the window to the front.
-- Elevated windows need the daemon to run as administrator. The Windows secure desktop cannot be automated.
-- Password fields are shown masked and are never read.
+## Project structure
+
+```
+shadow/            the agent: daemon, CLI, engine, replay runner, learning, extraction, drawing
+  core/            element model, screen text, fingerprints, post-conditions, skills
+  cv/              OCR, incremental reading, box detection, merging vision into the tree
+  drivers/         Windows (UI Automation, MSAA, input) and Linux (X11, pixels)
+  llm/             Gemini client and prompts for learning, repair, extraction
+brain/             Cloud Run API: pairing, command relay, Gemini proxy, Firestore store
+dashboard/         web harness (static, Firebase Hosting) and Firestore rules
+sandbox/           Linux desktop image and the demo application for the cloud sandbox
+skills/shadow/     SKILL.md for other AI agents
+deploy/            Cloud Build configuration and deployment script
+tests/             unit tests, fixtures, test applications and live end-to-end scripts
+```
+
+## Project status and limitations
+
+Shadow is a hackathon prototype under active development.
+
+**Verified on real software:** reading, acting, recording, compiling, replay and repair on WinForms, Tk and Chrome; every web and desktop form control listed above; table and item extraction with paging and scrolling on test applications and books.toscrape.com; learning and repair with real Gemini; drawing, labelling and selecting objects on excalidraw.com; the web harness driven end to end.
+
+**Not yet verified:** deployment to Google Cloud and the sandbox container end to end; the `shadow draw` diagram command and the `hover` and `drag_to` actions on live applications (covered by unit tests only); reading PDFs and images through the web harness.
+
+**Known limitations:**
+
+- Windows is the primary platform. Linux (X11) is supported as pixels only, for the sandbox; macOS is not supported.
+- OCR can misread small text. OCR-read text is matched with look-alike characters folded together, and each such element reports its confidence.
+- Vision detects inputs, buttons, labelled checkboxes and text, but does not name icons without text; an unlabelled shape on a canvas is reachable by position only.
+- Windows must not be minimised, and elements read only from pixels are operated with the real mouse.
+- Elevated windows require the daemon to run as administrator; the Windows secure desktop cannot be automated.
+- Infinite-scroll extraction is slow (about 2.5 s per scroll that loads nothing).
 
 ## Related work
 
-Shadow combines ideas that exist separately. Microsoft UFO² fuses UI Automation with vision; Stagehand caches browser actions and self-heals; Cua provides sandboxes and drivers. What this project adds is the combination on the whole desktop: one merged tree, compilation to readable code with multi-signal fingerprints, versioned healing with validation, canvas and remote-desktop handling, and a measured drop in LLM calls.
+Shadow combines ideas that exist separately: Microsoft UFO² fuses UI Automation with vision; Stagehand caches browser actions and self-heals; Cua provides sandboxes and drivers. Shadow's contribution is the combination across the whole desktop: one merged tree, compilation to readable code with multi-signal fingerprints, versioned and validated repair, canvas and remote-desktop handling, structured extraction, and a measured reduction in model calls.
 
-## Dependencies and licences
+### Third-party software
 
-comtypes (MIT), FastAPI (MIT), Uvicorn (BSD-3), mss (MIT), Pillow (MIT-CMU), NumPy (BSD-3), OpenCV (Apache-2.0), ONNX Runtime (MIT), RapidOCR with PP-OCR models (Apache-2.0), google-genai (Apache-2.0), google-cloud-firestore (Apache-2.0), firebase-admin (Apache-2.0). No AGPL-licensed detector is used.
+comtypes (MIT), FastAPI (MIT), Uvicorn (BSD-3-Clause), mss (MIT), Pillow (MIT-CMU), NumPy (BSD-3-Clause), OpenCV (Apache-2.0), ONNX Runtime (MIT), RapidOCR with PP-OCR models (Apache-2.0), google-cloud-firestore (Apache-2.0), firebase-admin (Apache-2.0). No AGPL-licensed components are used.
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright © 2026 Sonu Vishwakarma.
