@@ -32,6 +32,7 @@ class Element:
     framework: str = ""
     confidence: Optional[float] = None  # CV elements only
     value_range: Optional[tuple] = None  # (minimum, maximum) of a slider or spinner
+    item_count: int = 0  # set on a container of repeated items (cards, tiles, results)
     cv_confirmed: bool = False
     parent: Optional["Element"] = field(default=None, repr=False)
     children: list["Element"] = field(default_factory=list, repr=False)

@@ -74,8 +74,8 @@ class RunState:
             out.update(ok=False, kind="needs_heal", packet=self.packet,
                        error=f"step {self.packet['step'] + 1} needs a heal: {self.packet['detail']}")
         if self.result:
-            out.update({k: self.result[k] for k in ("ms", "steps", "steps_done", "llm_calls", "heals",
-                                                    "patches", "error", "new_version")})
+            out.update({k: self.result.get(k) for k in ("ms", "steps", "steps_done", "llm_calls", "heals",
+                                                        "patches", "error", "new_version", "data")})
             if self.status == "needs_human":
                 out.update(kind="needs_human", packet=self.result.get("packet"))
             elif self.status in ("failed", "stopped"):

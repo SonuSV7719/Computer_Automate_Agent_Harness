@@ -4,6 +4,7 @@ Everything above it (CLI, daemon, learn loop, replay) goes through this class.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -333,6 +334,139 @@ class Engine:
             if time.perf_counter() >= deadline:
                 raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
             time.sleep(0.05)
+
+    # ---- structured data ----------------------------------------------
+    def _target(self, index: Optional[int], snapshot_id: Optional[int]) -> tuple[Snapshot, Optional[Element]]:
+        snap = self.snapshot or self.see()
+        if snapshot_id is not None and snapshot_id != snap.id:
+            raise StaleSnapshot(f"snapshot {snapshot_id} is stale; the latest is {snap.id}")
+        return snap, (snap.get(index) if index is not None else None)
+
+    def at_bottom(self, index: int) -> bool:
+        """True when the element is scrolled all the way down (or cannot say otherwise)."""
+        snap = self.snapshot or self.see()
+        try:
+            element = snap.get(index)
+        except KeyError:
+            return True
+        percent = getattr(self.driver, "scroll_percent", lambda e: None)(element)
+        return percent is None or percent >= 99.5
+
+    def reveal(self, element: Element) -> bool:
+        """Bring an element that is out of view into view, so it can be acted on."""
+        scroll = getattr(self.driver, "scroll_into_view", None)
+        if scroll is None or not scroll(element):
+            return False
+        time.sleep(0.15)
+        return True
+
+    def _scroll_target(self, snap: Snapshot, element: Optional[Element]) -> Optional[int]:
+        """The element to scroll to bring more of `element` into view: itself, or the
+        nearest scrollable ancestor; for a whole page, the scrollable document."""
+        node = element
+        while node is not None:
+            if "scroll" in node.patterns and node.index >= 0:
+                return node.index
+            node = node.parent
+        return next((e.index for e in snap.elements if "scroll" in e.patterns and e.role == "document"), None)
+
+    def _record(self, action: str, element: Optional[Element], snap: Snapshot, options: dict) -> None:
+        if self.recording:
+            self.trace.append({"action": action, "value": json.dumps(options) if options else None,
+                               "fingerprint": fingerprint.make(element, snap) if element is not None else None,
+                               "expect": None, "intent": options.pop("intent", "") if options else "",
+                               "route": "read", "ok": True, "ms": 0})
+
+    def extract_table(self, index: Optional[int] = None, snapshot_id: Optional[int] = None,
+                      next: Optional[str] = None, scroll: bool = False, max_pages: int = 50,
+                      fp: Optional[dict] = None) -> dict:
+        """All rows of a table, following "next page" and/or scrolling until the data ends."""
+        from . import extract
+        if self.halted:
+            raise Halted("stopped by the user; run `shadow resume` to continue")
+        snap, table = self._target(index, snapshot_id)
+        if table is None and fp is not None:
+            table, _how = fingerprint.resolve(fp, snap)
+        if table is None:
+            tables = extract.find_tables(snap.roots)
+            if not tables:
+                raise LookupError("no table on screen")
+            table = tables[0]
+        if not extract.is_table(table):
+            raise ValueError(f"element [{table.index}] is a {table.role}, not a table")
+        anchor = fp or (fingerprint.make(table, snap) if table.index >= 0 else None)
+        started = time.perf_counter()
+        first = extract.read_table(table)
+
+        def locate(s: Snapshot) -> Optional[Element]:
+            found = fingerprint.resolve(anchor, s)[0] if anchor else None
+            if found is None or not extract.is_table(found):
+                tables = extract.find_tables(s.roots)
+                found = tables[0] if tables else None
+            return found
+
+        def read(s: Snapshot):
+            found = locate(s)
+            return extract.read_table(found)["rows"] if found is not None else None
+
+        scroller = (lambda s: self._scroll_target(s, locate(s))) if scroll else None
+        result = extract.collect(lambda fn: fn(self), read, next, scroller, max_pages)
+        self._record("extract_table", table, snap, {"next": next, "scroll": scroll} if next or scroll else {})
+        return {"name": first["name"], "columns": first["columns"], "rows": result["records"],
+                "pages": result["pages"], "scrolls": result["scrolls"], "stopped": result["stopped"],
+                "ms": round((time.perf_counter() - started) * 1000, 1)}
+
+    def extract_items(self, index: Optional[int] = None, snapshot_id: Optional[int] = None,
+                      next: Optional[str] = None, scroll: bool = False, max_pages: int = 50,
+                      fp: Optional[dict] = None) -> dict:
+        """All repeated items (product cards, results, tiles), across pages and scrolling."""
+        from . import extract
+        if self.halted:
+            raise Halted("stopped by the user; run `shadow resume` to continue")
+        snap, container = self._target(index, snapshot_id)
+        if container is None and fp is not None:
+            container, _how = fingerprint.resolve(fp, snap)
+        groups = extract.find_item_groups(snap.roots)
+        min_fields = 2
+        if container is not None:
+            group = [g for g in groups if g[0] is container]
+            if group:
+                chosen = group[0]
+            elif extract.list_entries(container):
+                chosen, min_fields = (container, extract.list_entries(container)), 1
+            else:
+                raise ValueError(f"element [{container.index}] does not hold repeated items")
+        elif groups:
+            chosen = groups[0]
+        else:
+            raise LookupError("no repeated items (cards, tiles or results) on screen")
+        anchor = fp or (fingerprint.make(chosen[0], snap) if chosen[0].index >= 0 else None)
+        reference = extract.shape_of(chosen[1])
+        started = time.perf_counter()
+
+        def read(s: Snapshot):
+            if anchor:
+                target = fingerprint.resolve(anchor, s)[0]
+                if target is not None:
+                    members = extract.items_in(target, reference, min_fields)
+                    if members:
+                        return extract.read_items(members)
+            found = [g for g in extract.find_item_groups(s.roots, minimum=1)
+                     if extract._similar(extract.shape_of(g[1]), reference)]
+            return extract.read_items(found[0][1]) if found else None
+
+        def scroller(s: Snapshot):
+            target = fingerprint.resolve(anchor, s)[0] if anchor else None
+            return self._scroll_target(s, target or chosen[0])
+
+        result = extract.collect(lambda fn: fn(self), read, next, scroller if scroll else None, max_pages)
+        self._record("extract_items", chosen[0] if chosen[0].index >= 0 else None, snap,
+                     {"next": next, "scroll": scroll} if next or scroll else {})
+        items = result["records"]
+        fields = sorted({k for item in items for k in item if k != "texts"})
+        return {"items": items, "count": len(items), "fields": fields, "pages": result["pages"],
+                "scrolls": result["scrolls"], "stopped": result["stopped"],
+                "ms": round((time.perf_counter() - started) * 1000, 1)}
 
     # ---- recording -----------------------------------------------------
     def record_start(self) -> None:

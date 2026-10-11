@@ -54,6 +54,7 @@ class Runner:
         # Skills that never touched a vision-read element replay on the tree alone.
         self.cv = None if any(v["fingerprint"].get("source") != "tree" for v in skill.locators.values()) else False
         self.patches: list[dict] = []
+        self.data: list[dict] = []  # tables and items read by the run
         self._pending: dict[int, tuple] = {}  # step -> a retarget whose action ran but whose check failed
         self.events: list[dict] = []
         self.llm_calls = 0
@@ -65,6 +66,29 @@ class Runner:
 
     def text(self, value: str, expect: Optional[str] = None, timeout: float = 3.0, irreversible: bool = False):
         self._step("text", None, value, expect, timeout, irreversible)
+
+    def extract_table(self, ref: Optional[ElRef] = None, options: Optional[str] = None, **_ignored):
+        return self._extract("extract_table", ref, options)
+
+    def extract_items(self, ref: Optional[ElRef] = None, options: Optional[str] = None, **_ignored):
+        return self._extract("extract_items", ref, options)
+
+    def _extract(self, action: str, ref: Optional[ElRef], options: Optional[str]):
+        """Read a table or repeated items; the result is returned to the caller of the run."""
+        import json as _json
+        n = self._n
+        self._n += 1
+        started = time.perf_counter()
+        opts = _json.loads(options) if options else {}
+        fp = self.locators[ref.id]["fingerprint"] if ref is not None and ref.id in self.locators else None
+        data = self.call(lambda e: getattr(e, action)(next=opts.get("next"), scroll=bool(opts.get("scroll")),
+                                                      max_pages=int(opts.get("max_pages", 50)), fp=fp))
+        self.data.append({"step": n, "kind": action.split("_", 1)[1], **data})
+        self._emit({"type": "step", "step": n, "action": action, "el": ref.id if ref else None,
+                    "ms": round((time.perf_counter() - started) * 1000, 1), "locator": "read",
+                    "route": "read", "healed": False,
+                    "rows": len(data.get("rows", data.get("items", [])))})
+        return data
 
     def __getattr__(self, name: str):
         if name not in ELEMENT_ACTIONS:
@@ -272,6 +296,7 @@ def run_skill(skill: Skill, code: str, call: EngineCall, params: Optional[dict] 
         skill=skill.name, version=skill.version, ms=round((time.perf_counter() - started) * 1000, 1),
         steps=steps, steps_done=len(steps), llm_calls=runner.llm_calls,
         heals=[e for e in runner.events if e["type"] == "heal"],
+        data=runner.data,
         patches=runner.patches,
         healed=apply_patches(skill, runner.patches) if runner.patches else None,
     )

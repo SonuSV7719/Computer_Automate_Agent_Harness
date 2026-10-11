@@ -129,6 +129,12 @@ def render_code(skill: Skill) -> str:
         if step.get("intent"):
             lines.append(f"    # {step['intent']}")
         call_args = []
+        if step["action"].startswith("extract_"):
+            call_args.append(f'el("{step["el"]}")' if "el" in step else "None")
+            if step.get("value"):
+                call_args.append(f"options={step['value']!r}")
+            lines.append(f"    h.{step['action']}({', '.join(call_args)})")
+            continue
         if "el" in step:
             call_args.append(f'el("{step["el"]}")')
         if "param" in step:

@@ -24,6 +24,7 @@ NEEDS_LABEL = {"input", "dropdown", "spinner", "slider", "checkbox", "radio", "d
 COUNT_HIDDEN = {"list", "tree", "table"}
 
 MAX_TEXT = 80
+MAX_TABLE_ROWS = 25
 
 
 def _clip(text: str, limit: int = MAX_TEXT) -> str:
@@ -44,7 +45,8 @@ def is_shown(e: Element) -> bool:
 
 
 def is_indexed(e: Element) -> bool:
-    return bool(e.actions) or e.role not in (STRUCT_ALWAYS | FLATTEN)
+    return bool(e.actions) or e.role not in (STRUCT_ALWAYS | FLATTEN) or e.role == "table" \
+        or getattr(e, "item_count", 0) > 0
 
 
 def infer_labels(roots: list[Element]) -> None:
@@ -124,6 +126,8 @@ def describe(e: Element, with_index: bool = True) -> str:
         if options:
             shown = " | ".join(_clip(o, 30) for o in options[:12])
             flags.append(f"options: {shown}" + (f" | +{len(options) - 12} more" if len(options) > 12 else ""))
+    if getattr(e, "item_count", 0):
+        flags.append(f"{e.item_count} similar items, read with: shadow items {e.index}")
     if e.role == "region":
         flags.append(f"no tree, read by CV, {e.box[2] - e.box[0]}x{e.box[3] - e.box[1]} px")
     elif e.source == "cv" and e.parent is not None and e.parent.role == "region" and e.parent.area:
@@ -142,14 +146,67 @@ def describe(e: Element, with_index: bool = True) -> str:
     return line
 
 
+def is_table(e: Element) -> bool:
+    from ..extract import is_table as check
+    return check(e)
+
+
 def serialize(roots: list[Element], window: WindowInfo, snapshot_id: int, ms: float = 0.0):
     """Assign indexes and return (header, body, indexed elements)."""
+    from ..extract import find_item_groups
     infer_labels(roots)
+    for container, members in find_item_groups(roots):
+        container.item_count = len(members)
     indexed: list[Element] = []
     lines: list[str] = []
 
+    def emit_table(e: Element, depth: int) -> None:
+        """A table as columns and one line per visible row; every cell keeps an index."""
+        from ..extract import _cells_of, _rows_of, text_of
+        rows = _rows_of(e) or [c for c in e.children if c.role in ("listitem", "row")]
+        header = None
+        body = []
+        for row in rows:
+            cells = _cells_of(row)
+            if header is None and cells and all(c.role == "headeritem" for c in cells):
+                header = cells
+            else:
+                body.append((row, cells))
+        hidden = sum(1 for row, _ in body if not visible(row))
+        e.index = len(indexed)
+        indexed.append(e)
+        title = f' "{_clip(e.title)}"' if e.title else ""
+        flags = f"{len(header or (body[0][1] if body else []))} columns, {len(body)} rows"
+        if hidden:
+            flags += f", {hidden} not in view"
+        lines.append("  " * depth + f"[{e.index}] table{title} ({flags})  read with: shadow table {e.index}")
+        pad = "  " * (depth + 1)
+
+        def cell_ref(cell: Element) -> str:
+            target = next((c for c in cell.walk() if c is not cell and c.actions and visible(c)), None) or cell
+            if visible(target):
+                target.index = len(indexed)
+                indexed.append(target)
+                return f'[{target.index}] "{_clip(text_of(cell), 40)}"'
+            return f'"{_clip(text_of(cell), 40)}"'
+
+        if header:
+            lines.append(pad + "columns: " + " | ".join(cell_ref(c) for c in header))
+        shown = 0
+        for n, (row, cells) in enumerate(body, 1):
+            if not visible(row):
+                continue
+            if shown == MAX_TABLE_ROWS:
+                lines.append(pad + f"… {sum(1 for r, _ in body[n - 1:] if visible(r))} more rows in view")
+                break
+            lines.append(pad + f"r{n}: " + " | ".join(cell_ref(c) for c in cells))
+            shown += 1
+
     def emit(e: Element, depth: int) -> None:
         if not visible(e):
+            return
+        if is_table(e):
+            emit_table(e, depth)
             return
         parent = e.parent
         if e.role == "text" and parent is not None and parent.title == e.name and is_shown(parent):

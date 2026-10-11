@@ -103,6 +103,18 @@ def act(action: str = Body(...), index: Optional[int] = Body(None), value: Optio
     return reply
 
 
+@app.post("/data/table")
+def data_table(index: Optional[int] = Body(None), snapshot: Optional[int] = Body(None),
+               next: Optional[str] = Body(None), scroll: bool = Body(False), max_pages: int = Body(50)) -> dict:
+    return run(lambda e: e.extract_table(index, snapshot, next, scroll, max_pages))
+
+
+@app.post("/data/items")
+def data_items(index: Optional[int] = Body(None), snapshot: Optional[int] = Body(None),
+               next: Optional[str] = Body(None), scroll: bool = Body(False), max_pages: int = Body(50)) -> dict:
+    return run(lambda e: e.extract_items(index, snapshot, next, scroll, max_pages))
+
+
 @app.post("/record")
 def record(cmd: str = Body(..., embed=True)) -> dict:
     def fn(e):
@@ -374,6 +386,12 @@ def _handle_command(command: dict) -> dict:
         return extract(args["skill"], args["text"])
     if kind == "runs":
         return runs_list(None)
+    if kind == "table":
+        return data_table(args.get("index"), None, args.get("next"), bool(args.get("scroll")),
+                          int(args.get("max_pages", 50)))
+    if kind == "items":
+        return data_items(args.get("index"), None, args.get("next"), bool(args.get("scroll")),
+                          int(args.get("max_pages", 50)))
     if kind == "demo_app":
         return demo_app(args.get("variant", "v1"))
     return {"ok": False, "kind": "invalid", "error": f"unknown command type '{kind}'"}

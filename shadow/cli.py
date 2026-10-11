@@ -129,6 +129,47 @@ def _run_text(reply: dict) -> str | None:
     return "\n".join(lines)
 
 
+def _write_csv(path: str, reply: dict, kind: str) -> None:
+    import csv
+    with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.writer(handle)
+        if kind == "table":
+            writer.writerow(reply["columns"])
+            writer.writerows(reply["rows"])
+        else:
+            fields = reply["fields"] + ["texts"]
+            writer.writerow(fields)
+            for item in reply["items"]:
+                writer.writerow([" | ".join(item[f]) if isinstance(item.get(f), list) else item.get(f, "")
+                                 for f in fields])
+
+
+def _summary(reply: dict, noun: str, count: int) -> str:
+    return (f"{count} {noun} from {reply['pages']} page(s)"
+            + (f" and {reply['scrolls']} scroll(s)" if reply.get("scrolls") else "")
+            + f" in {reply['ms']} ms; stopped: {reply['stopped']}")
+
+
+def _table_text(reply: dict) -> str:
+    rows = [reply["columns"]] + reply["rows"]
+    widths = [min(32, max(len(str(r[i])) if i < len(r) else 0 for r in rows)) for i in range(len(reply["columns"]))]
+    fmt = lambda r: "  ".join(str(r[i] if i < len(r) else "")[:32].ljust(widths[i]) for i in range(len(widths)))
+    shown = [fmt(reply["columns"]), "  ".join("-" * w for w in widths)] + [fmt(r) for r in reply["rows"][:40]]
+    if len(reply["rows"]) > 40:
+        shown.append(f"… {len(reply['rows']) - 40} more rows (use --json or --csv for all)")
+    return "\n".join([_summary(reply, "rows", len(reply["rows"])), ""] + shown)
+
+
+def _items_text(reply: dict) -> str:
+    lines = [_summary(reply, "items", reply["count"]), "fields: " + ", ".join(reply["fields"]), ""]
+    for n, item in enumerate(reply["items"][:40], 1):
+        parts = [f"{k}={item[k]}" for k in ("title", "price", "rating", "reviews") if item.get(k)]
+        lines.append(f"{n:>3}. " + " | ".join(parts or [" / ".join(item.get("texts", [])[:4])]))
+    if reply["count"] > 40:
+        lines.append(f"… {reply['count'] - 40} more items (use --json or --csv for all)")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -207,6 +248,16 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("code", help="the pairing code shown in the web harness")
     pr.add_argument("--url", default=os.environ.get("SHADOW_BRAIN_URL", ""), help="the brain's address")
     pr.add_argument("--name", default="")
+
+    for name, what in (("table", "read a table: all rows, across pages and scrolling"),
+                       ("items", "read repeated items such as product cards, across pages and scrolling")):
+        dp = sub.add_parser(name, help=what)
+        dp.add_argument("index", nargs="?", type=int, help="the table or item container (default: the main one)")
+        dp.add_argument("--next", help='name of the next-page control, e.g. "Next" or "Next page"')
+        dp.add_argument("--scroll", action="store_true", help="scroll to load more until nothing new appears")
+        dp.add_argument("--max-pages", type=int, default=50)
+        dp.add_argument("--csv", help="also write the data to this CSV file")
+        dp.add_argument("--snapshot", type=int)
 
     sub.add_parser("status", help="daemon, pairing and Gemini status")
     sub.add_parser("stop", help="kill switch: stop touching the desktop now (also Ctrl+Alt+F12)")
@@ -329,6 +380,15 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("pair needs --url (or set SHADOW_BRAIN_URL)")
         reply = call("/pair", {"url": args.url, "code": args.code, "name": args.name})
         return _finish(reply, as_json, f"paired as device {reply.get('device_id')} with {reply.get('url')}")
+
+    if args.cmd in ("table", "items"):
+        reply = call(f"/data/{args.cmd}", {"index": args.index, "snapshot": args.snapshot, "next": args.next,
+                                          "scroll": args.scroll, "max_pages": args.max_pages})
+        if not reply.get("ok"):
+            return _finish(reply, as_json, "")
+        if args.csv:
+            _write_csv(args.csv, reply, args.cmd)
+        return _finish(reply, as_json, _table_text(reply) if args.cmd == "table" else _items_text(reply))
 
     if args.cmd in ("stop", "resume"):
         reply = call("/" + args.cmd)

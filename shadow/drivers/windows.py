@@ -338,6 +338,23 @@ class WindowsDriver:
             points.append((round(l + (r - l) * fx / 1000), round(t + (b - t) * fy / 1000)))
         return points
 
+    def scroll_percent(self, e: Element) -> Optional[float]:
+        """How far down an element is scrolled, 0-100, or None if it does not say."""
+        if e.handle is None or "scroll" not in e.patterns:
+            return None
+        try:
+            value = e.handle.GetCurrentPropertyValue(UIA.UIA_ScrollVerticalScrollPercentPropertyId)
+        except Exception:
+            return None
+        return float(value) if isinstance(value, (int, float)) and value >= 0 else None
+
+    def scroll_into_view(self, e: Element) -> bool:
+        """Scroll whatever contains the element until it is visible."""
+        if e.handle is None:
+            return False
+        return self._pattern(e, UIA.UIA_ScrollItemPatternId, UIA.IUIAutomationScrollItemPattern,
+                             lambda p: p.ScrollIntoView())
+
     def element_at(self, x: int, y: int) -> Optional[dict]:
         """What the application itself reports under a screen point (live hit-testing)."""
         from ctypes import wintypes
@@ -574,6 +591,20 @@ class WindowsDriver:
         if action == "scroll":
             direction, _, amount = (value or "down 3").partition(" ")
             notches = int(amount or 3)
+            if tree_backed and "scroll" in e.patterns:
+                # The element's own scroll control: no mouse, and it scrolls this element even
+                # when the pointer would be over something else.
+                vertical = UIA.ScrollAmount_LargeDecrement if direction == "up" else UIA.ScrollAmount_LargeIncrement
+                steps = max(1, notches // 3)
+
+                def scroll(p):
+                    for _ in range(steps):
+                        p.Scroll(UIA.ScrollAmount_NoAmount, vertical)
+
+                if self._pattern(e, UIA.UIA_ScrollPatternId, UIA.IUIAutomationScrollPattern, scroll):
+                    return "uia.scroll"
+            if e.offscreen:
+                self.scroll_into_view(e)
             win_input.focus_window(e.root_hwnd)
             win_input.scroll(*e.center, notches if direction == "up" else -notches)
             return "wheel"
