@@ -45,8 +45,10 @@ def is_shown(e: Element) -> bool:
 
 
 def is_indexed(e: Element) -> bool:
+    # Named containers get an index too: they can be drop targets, scrolled, or read as data.
+    named_container = bool(e.title) and e.role in ("list", "tree", "group", "pane", "table", "region")
     return bool(e.actions) or e.role not in (STRUCT_ALWAYS | FLATTEN) or e.role == "table" \
-        or getattr(e, "item_count", 0) > 0
+        or getattr(e, "item_count", 0) > 0 or named_container
 
 
 def infer_labels(roots: list[Element]) -> None:

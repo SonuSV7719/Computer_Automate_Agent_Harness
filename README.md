@@ -295,9 +295,9 @@ tests/             unit tests, fixtures, test applications and live end-to-end s
 
 Shadow is a hackathon prototype under active development.
 
-**Verified on real software:** reading, acting, recording, compiling, replay and repair on WinForms, Tk and Chrome; every web and desktop form control listed above; table and item extraction with paging and scrolling on test applications and books.toscrape.com; learning and repair with real Gemini; drawing, labelling and selecting objects on excalidraw.com; the web harness driven end to end.
+**Verified on real software:** reading, acting, recording, compiling, replay and repair on WinForms, Tk and Chrome; every web and desktop form control listed above; table and item extraction with paging and scrolling on test applications and books.toscrape.com; learning and repair with real Gemini; drawing, labelling and selecting objects on excalidraw.com, and whole diagrams planned by Gemini from one sentence (8 boxes and 8 arrows, every label verified); hover menus, HTML drag and drop, triple click, Ctrl+click, right-click menus and double click; the web harness driven end to end.
 
-**Not yet verified:** deployment to Google Cloud and the sandbox container end to end; the `shadow draw` diagram command and the `hover` and `drag_to` actions on live applications (covered by unit tests only); reading PDFs and images through the web harness.
+**Not yet verified:** deployment to Google Cloud and the sandbox container end to end; reading PDFs and images through the web harness.
 
 **Known limitations:**
 

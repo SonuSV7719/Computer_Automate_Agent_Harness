@@ -146,12 +146,25 @@ def draw(engine, spec: dict, tools: Optional[dict] = None, on_event: Optional[Ca
         if on_event:
             on_event({"type": "draw", "what": "arrow", "from": edge["from"], "to": edge["to"]})
 
-    # Read the canvas back: every label should now be visible on it.
+    # Read the canvas back: every label should now be visible inside its own box. A label
+    # that wrapped onto two lines comes back as two pieces of text, so the pieces found
+    # within the box are joined before comparing.
     time.sleep(0.4)
     snap = engine.see()
-    on_canvas = [e.name for root in snap.roots for e in root.walk() if e.source == "cv" and e.name]
-    found = [n["label"] for n in spec["nodes"]
-             if any(textmatch.contains(text, n["label"], ocr=True) for text in on_canvas)]
+    canvas = _canvas(snap)
+    pieces = [e for root in snap.roots for e in root.walk() if e.source == "cv" and e.name]
+    found = []
+    for n in spec["nodes"]:
+        inside = pieces
+        if canvas is not None:
+            cl, ct, cr, cb = canvas.box
+            l, t, r, b = boxes[n["id"]]
+            sl, st = cl + (cr - cl) * l / 1000, ct + (cb - ct) * t / 1000
+            sr, sb = cl + (cr - cl) * r / 1000, ct + (cb - ct) * b / 1000
+            inside = [e for e in pieces if sl <= e.center[0] <= sr and st <= e.center[1] <= sb]
+        joined = " ".join(e.name for e in sorted(inside, key=lambda e: (e.box[1], e.box[0])))
+        if textmatch.contains(joined, n["label"], ocr=True) or                 any(textmatch.contains(e.name, n["label"], ocr=True) for e in pieces):
+            found.append(n["label"])
     missing = [n["label"] for n in spec["nodes"] if n["label"] not in found]
     return {"title": spec["title"], "boxes": len(spec["nodes"]), "arrows": len(spec["edges"]), "actions": actions,
             "labels_found": found, "labels_missing": missing, "ok": not missing,

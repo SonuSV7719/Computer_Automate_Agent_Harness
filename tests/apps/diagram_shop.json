@@ -1,0 +1,7 @@
+{"title": "Shop", "nodes": [
+  {"id": "web", "label": "Web App", "col": 0, "row": 0},
+  {"id": "api", "label": "API Gateway", "col": 1, "row": 0},
+  {"id": "orders", "label": "Orders", "col": 2, "row": 0},
+  {"id": "db", "label": "Database", "col": 2, "row": 1},
+  {"id": "pay", "label": "Payments", "col": 1, "row": 1}],
+ "edges": [{"from": "web", "to": "api"}, {"from": "api", "to": "orders"}, {"from": "orders", "to": "db"}, {"from": "api", "to": "pay"}]}

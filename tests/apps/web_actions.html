@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Human Actions Test</title>
+<style>
+  body { font: 16px "Segoe UI", sans-serif; margin: 20px; background: #f6f6f6; }
+  section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+  .menu { position: relative; display: inline-block; padding: 8px 14px; background: #e8eef7; border-radius: 6px; }
+  .menu .sub { display: none; position: absolute; left: 0; top: 100%; background: #fff; border: 1px solid #ccc; padding: 6px; }
+  .menu:hover .sub { display: block; }
+  .board { display: flex; gap: 20px; }
+  .col { width: 220px; min-height: 120px; border: 2px dashed #99a; border-radius: 8px; padding: 8px; }
+  .card { padding: 8px; margin: 6px 0; background: #fff3c4; border: 1px solid #c9b45c; border-radius: 6px; cursor: grab; }
+  .opt { display: inline-block; padding: 6px 12px; margin: 4px; border: 1px solid #aaa; border-radius: 6px; cursor: pointer; }
+  .opt.on { background: #1a56db; color: #fff; }
+  #ctx { display: none; position: fixed; background: #fff; border: 1px solid #888; padding: 4px; }
+  #ctx button { display: block; width: 140px; text-align: left; }
+  [role=status] { font-weight: 600; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>Human Actions Test</h1>
+
+<section aria-label="Hover menu">
+  <div class="menu" tabindex="0">Products menu
+    <div class="sub"><a href="#laptops" id="laptops">Laptops</a><br><a href="#phones" id="phones">Phones</a></div>
+  </div>
+  <div id="hover-status" role="status">Menu closed</div>
+</section>
+
+<section aria-label="Task board">
+  <div class="board">
+    <div class="col" id="todo" role="list" aria-label="To do column">
+      <div class="card" draggable="true" id="taskA" role="listitem">Task A</div>
+      <div class="card" draggable="true" id="taskB" role="listitem">Task B</div>
+    </div>
+    <div class="col" id="done" role="list" aria-label="Done column"></div>
+  </div>
+  <div id="drag-status" role="status">Nothing moved</div>
+</section>
+
+<section aria-label="Text and selection">
+  <p id="para">The quick brown fox jumps over the lazy dog.</p>
+  <div id="select-status" role="status">Nothing selected</div>
+  <div>
+    <span class="opt" role="option" aria-selected="false">Red</span>
+    <span class="opt" role="option" aria-selected="false">Green</span>
+    <span class="opt" role="option" aria-selected="false">Blue</span>
+  </div>
+  <div id="multi-status" role="status">Colours: none</div>
+</section>
+
+<section aria-label="Menus and editing">
+  <div id="file" style="padding:8px;border:1px solid #ccc;width:200px" role="button" aria-label="Report file">report.pdf (right-click me)</div>
+  <div id="ctx"><button id="ctx-rename">Rename</button><button id="ctx-delete">Delete</button></div>
+  <div id="ctx-status" role="status">No menu choice</div>
+  <div id="cell" style="padding:8px;border:1px solid #ccc;width:200px;margin-top:8px" role="button" aria-label="Customer name">Asha (double-click to edit)</div>
+  <div id="edit-status" role="status">Not editing</div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+document.querySelector(".menu").addEventListener("mouseenter", () => $("hover-status").textContent = "Menu open");
+document.querySelector(".menu").addEventListener("mouseleave", () => $("hover-status").textContent = "Menu closed");
+for (const id of ["laptops", "phones"]) $(id).onclick = e => { e.preventDefault(); $("hover-status").textContent = "Chose " + e.target.textContent; };
+
+let dragged = null;
+document.querySelectorAll(".card").forEach(c => c.addEventListener("dragstart", e => { dragged = c; e.dataTransfer.setData("text/plain", c.id); }));
+for (const col of [$("todo"), $("done")]) {
+  col.addEventListener("dragover", e => e.preventDefault());
+  col.addEventListener("drop", e => { e.preventDefault(); if (dragged) { col.append(dragged);
+    $("drag-status").textContent = dragged.textContent + " moved to " + (col.id === "done" ? "Done" : "To do"); } });
+}
+
+document.addEventListener("selectionchange", () => {
+  const text = String(getSelection()).trim();
+  if (text) $("select-status").textContent = "Selected: " + text;
+});
+
+document.querySelectorAll(".opt").forEach(o => o.addEventListener("click", e => {
+  if (!e.ctrlKey) document.querySelectorAll(".opt").forEach(x => { x.classList.remove("on"); x.setAttribute("aria-selected", "false"); });
+  o.classList.toggle("on"); o.setAttribute("aria-selected", o.classList.contains("on"));
+  const chosen = [...document.querySelectorAll(".opt.on")].map(x => x.textContent);
+  $("multi-status").textContent = "Colours: " + (chosen.join("+") || "none");
+}));
+
+$("file").addEventListener("contextmenu", e => { e.preventDefault(); const m = $("ctx");
+  m.style.left = e.clientX + "px"; m.style.top = e.clientY + "px"; m.style.display = "block"; });
+for (const id of ["ctx-rename", "ctx-delete"]) $(id).onclick = e => { $("ctx").style.display = "none";
+  $("ctx-status").textContent = "Menu choice: " + e.target.textContent; };
+
+$("cell").addEventListener("dblclick", () => { $("edit-status").textContent = "Editing customer name"; });
+</script>
+</body>
+</html>
