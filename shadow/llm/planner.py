@@ -10,7 +10,7 @@ import json
 from .client import LlmClient
 
 ACTIONS = ["click", "doubleclick", "rightclick", "type", "append", "select", "toggle", "expand",
-           "collapse", "scroll", "click_at", "drag", "key", "text"]
+           "collapse", "scroll", "click_at", "drag", "set", "key", "text"]
 
 SCREEN_FORMAT = """\
 The screen is given as text, one element per line:
@@ -36,7 +36,8 @@ You operate a desktop application for a user, one action at a time, to achieve t
 Reply with exactly one next action as JSON. Every reply must have "action".
 - "action": what to do. Choose one the element lists under "actions". "type" replaces the
   field's content, "append" adds to it, "select" chooses a dropdown option or list item (put
-  the option text in "value"). "key" presses a key or combination such as "enter" or "ctrl+s"
+  the option text in "value"; for a list marked "several allowed" give options as "A | B").
+  "set" moves a slider or number spinner to a number. "key" presses a key or combination such as "enter" or "ctrl+s"
   and needs no index. Use "done" when the goal is fully achieved or cannot be achieved.
 - "index": the element to act on. Use only an index that appears on the current screen.
 - "value": the text to type, the option to select, or the key to press.

@@ -28,7 +28,7 @@ ROLES = {
     50036: "table", 50037: "titlebar", 50038: "separator", 50039: "custom", 50040: "appbar",
 }
 CLICKABLE = {"button", "link", "menuitem", "tabitem", "listitem", "treeitem", "checkbox", "radio",
-             "splitbutton", "headeritem", "row"}
+             "splitbutton", "headeritem", "row", "switch"}
 TYPABLE = {"input", "document", "dropdown", "spinner"}
 
 P = UIA  # short alias for property and pattern ids
@@ -42,9 +42,66 @@ CACHED_PROPERTIES = [
     P.UIA_IsExpandCollapsePatternAvailablePropertyId, P.UIA_IsScrollPatternAvailablePropertyId,
     P.UIA_ValueValuePropertyId, P.UIA_ValueIsReadOnlyPropertyId, P.UIA_ToggleToggleStatePropertyId,
     P.UIA_SelectionItemIsSelectedPropertyId, P.UIA_ExpandCollapseExpandCollapseStatePropertyId,
+    P.UIA_AriaRolePropertyId, P.UIA_IsRangeValuePatternAvailablePropertyId, P.UIA_RangeValueValuePropertyId,
+    P.UIA_RangeValueMinimumPropertyId, P.UIA_RangeValueMaximumPropertyId,
+    P.UIA_IsSelectionPatternAvailablePropertyId, P.UIA_SelectionCanSelectMultiplePropertyId,
+    P.UIA_IsGridItemPatternAvailablePropertyId, P.UIA_IsTableItemPatternAvailablePropertyId,
 ]
+# Web pages say exactly what an element is through its ARIA role; it is more precise than
+# the generic control type (a table cell and a table row are both "data items" otherwise).
+ARIA_ROLES = {
+    "columnheader": "headeritem", "rowheader": "headeritem", "cell": "cell", "gridcell": "cell", "row": "row",
+    "grid": "table", "table": "table", "treegrid": "table", "switch": "switch", "searchbox": "input",
+    "spinbutton": "spinner", "slider": "slider", "heading": "heading", "listbox": "list", "option": "listitem",
+    "tab": "tabitem", "tablist": "tab", "menuitemcheckbox": "checkbox", "menuitemradio": "radio",
+}
 MAX_NODES = 4000
 PATTERN_TIMEOUT = 2.0
+
+
+DATE_PART_NAMES = {"day": "day", "month": "month", "year": "year"}
+
+
+def _date_parts(e: Element) -> list:
+    """The day, month and year parts of a date field, in the order they are shown."""
+    found = []
+    for child in e.children:
+        if child.role != "spinner" or "range" not in child.patterns:
+            continue
+        first = (child.name.split() or [""])[0].casefold()
+        if first in DATE_PART_NAMES:
+            found.append((DATE_PART_NAMES[first], child))
+    kinds = {kind for kind, _ in found}
+    return sorted(found, key=lambda kp: kp[1].box[0]) if kinds == {"day", "month", "year"} else []
+
+
+def _parse_date(value: str, order: list) -> Optional[dict]:
+    """Read 2024-07-15, or 15/07/2024 in the field's own day/month order."""
+    import re as _re
+    iso = _re.fullmatch(r"\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s*", value)
+    if iso:
+        return {"year": int(iso.group(1)), "month": int(iso.group(2)), "day": int(iso.group(3))}
+    local = _re.fullmatch(r"\s*(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\s*", value)
+    if local:
+        first, second, year = int(local.group(1)), int(local.group(2)), int(local.group(3))
+        small = [k for k in order if k != "year"]
+        values = dict(zip(small, (first, second)))
+        values["year"] = year
+        return values
+    return None
+
+
+def _number(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def _has_web_content(roots: list[Element]) -> bool:
+    """True when a web page inside the window exposes more than an empty document."""
+    for root in roots:
+        for e in root.walk():
+            if e.role == "document" and sum(1 for _ in e.walk()) > 3:
+                return True
+    return False
 
 
 def _com_init() -> None:
@@ -64,6 +121,7 @@ class WindowsDriver:
         # Pattern calls such as Invoke can block while the app shows a modal dialog,
         # so they run on their own threads with a timeout.
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="uia-act", initializer=_com_init)
+        self._woken: set[int] = set()
 
     # ---- windows -------------------------------------------------------
     def list_windows(self) -> list[WindowInfo]:
@@ -80,6 +138,18 @@ class WindowsDriver:
 
     # ---- tree ----------------------------------------------------------
     def tree(self, hwnd: int) -> list[Element]:
+        roots = self._tree(hwnd)
+        if hwnd not in self._woken and win_input.window_info(hwnd).class_name.startswith("Chrome_WidgetWin"):
+            self._woken.add(hwnd)
+            if win_input.wake_accessibility(hwnd) and not _has_web_content(roots):
+                for _ in range(10):  # the page's tree arrives a moment after the request
+                    time.sleep(0.2)
+                    roots = self._tree(hwnd)
+                    if _has_web_content(roots):
+                        break
+        return roots
+
+    def _tree(self, hwnd: int) -> list[Element]:
         roots = []
         for handle in [hwnd] + win_input.popups_of(hwnd):
             try:
@@ -111,6 +181,12 @@ class WindowsDriver:
             return None
 
         role = ROLES.get(control_type, "custom")
+        aria = (prop(P.UIA_AriaRolePropertyId) or "").strip().lower()
+        if aria in ARIA_ROLES:
+            role = ARIA_ROLES[aria]
+        elif prop(P.UIA_IsTableItemPatternAvailablePropertyId, False) or (
+                prop(P.UIA_IsGridItemPatternAvailablePropertyId, False) and role in ("custom", "row", "text", "edit")):
+            role = "cell"  # a desktop grid's cell (WinForms, WPF) exposes its row and column
         if role == "window" and parent is not None:
             role = "dialog"
         e = Element(
@@ -154,6 +230,20 @@ class WindowsDriver:
                 e.expanded = state in (1, 2)
         if prop(P.UIA_IsScrollPatternAvailablePropertyId, False):
             e.patterns.add("scroll")
+        if prop(P.UIA_IsRangeValuePatternAvailablePropertyId, False) and role in ("slider", "spinner", "progressbar"):
+            e.patterns.add("range")
+            number = prop(P.UIA_RangeValueValuePropertyId)
+            if isinstance(number, (int, float)):
+                low, high = prop(P.UIA_RangeValueMinimumPropertyId), prop(P.UIA_RangeValueMaximumPropertyId)
+                e.value = _number(number)
+                if isinstance(low, (int, float)) and isinstance(high, (int, float)) and high > low:
+                    e.value_range = (_number(low), _number(high))
+        if prop(P.UIA_IsSelectionPatternAvailablePropertyId, False) and \
+                prop(P.UIA_SelectionCanSelectMultiplePropertyId, False):
+            e.patterns.add("multiselect")
+        if role == "switch" and "toggle" in e.patterns:
+            state = prop(P.UIA_ToggleToggleStatePropertyId, 0)
+            e.checked = {0: "off", 1: "on", 2: "mixed"}.get(state, "off")
 
         e.actions = self._actions(e, focusable)
 
@@ -168,7 +258,12 @@ class WindowsDriver:
                 e.children.append(child)
         if role == "dropdown" and e.enabled:
             editable = any(c.role == "input" for c in e.children)
-            e.actions = ["select"] + (["type"] if editable and not e.readonly else [])                 + [a for a in e.actions if a in ("expand", "collapse")]
+            editable = editable or ("value" in e.patterns and not e.readonly and focusable
+                                    and "expand" not in e.patterns)
+            e.actions = (["select"] + (["type"] if editable and not e.readonly else [])
+                         + [a for a in e.actions if a in ("expand", "collapse")])
+        if role == "list" and "multiselect" in e.patterns and e.enabled:
+            e.actions = ["select"] + [a for a in e.actions if a != "select"]  # value: "A | B | C"
         return e
 
     @staticmethod
@@ -180,8 +275,10 @@ class WindowsDriver:
             actions.append("click")
         if e.role in TYPABLE and not e.readonly and ("value" in e.patterns or focusable):
             actions.append("type")
-        if "toggle" in e.patterns and e.role in ("checkbox", "radio"):
+        if "toggle" in e.patterns and e.role in ("checkbox", "radio", "switch"):
             actions.append("toggle")
+        if "range" in e.patterns and not e.readonly and e.role != "progressbar":
+            actions.append("set")
         if "select" in e.patterns:
             actions.append("select")
         if "expand" in e.patterns:
@@ -251,6 +348,70 @@ class WindowsDriver:
                     "box": (rect.left, rect.top, rect.right, rect.bottom)}
         except Exception:
             return None
+
+    def _set_number(self, e: Element, value: Optional[str]) -> str:
+        """Move a slider or spinner to a number, by its range pattern, else its value."""
+        try:
+            number = float(value or "")
+        except ValueError:
+            raise ValueError(f'"set" needs a number, got "{value}"') from None
+        if e.handle is not None and "range" in e.patterns and self._pattern(
+                e, UIA.UIA_RangeValuePatternId, UIA.IUIAutomationRangeValuePattern, lambda p: p.SetValue(number)):
+            return "uia.range"
+        if e.handle is not None and "value" in e.patterns and self._pattern(
+                e, UIA.UIA_ValuePatternId, UIA.IUIAutomationValuePattern, lambda p: p.SetValue(_number(number))):
+            return "uia.value"
+        raise RuntimeError(f"{e.role} \"{e.title}\" cannot be set to a number")
+
+    def _set_date(self, e: Element, parts: list, value: str) -> str:
+        """Fill a date field made of day, month and year parts (browsers, many desktop pickers).
+
+        Each part is focused and its digits typed, as a person would: writing the parts'
+        values directly changes what is shown without the application receiving the date."""
+        order = [kind for kind, _ in parts]
+        numbers = _parse_date(value, order)
+        if numbers is None:
+            raise ValueError(f'"{value}" is not a date; write it as 2024-07-15 or 15/07/2024')
+        win_input.focus_window(e.root_hwnd)
+        for kind, part in parts:
+            try:
+                part.handle.SetFocus()
+            except Exception:
+                win_input.click(*part.center)
+            time.sleep(0.04)
+            win_input.type_text(str(numbers[kind]).zfill(4 if kind == "year" else 2))
+            time.sleep(0.04)
+        for kind, part in parts:  # read the parts back
+            try:
+                shown = part.handle.GetCurrentPropertyValue(UIA.UIA_RangeValueValuePropertyId)
+            except Exception:
+                continue
+            if isinstance(shown, (int, float)) and int(shown) != numbers[kind]:
+                raise RuntimeError(f'the {kind} of "{e.title}" shows {int(shown)} after typing {numbers[kind]}')
+        return "uia.parts"
+
+    def _select_many(self, e: Element, value: str) -> str:
+        """Choose one or several options of a list: "English | Japanese". The first replaces
+        the selection, the rest are added to it."""
+        wanted = [v.strip() for v in value.split("|") if v.strip()]
+        if not wanted:
+            raise ValueError("select needs at least one option")
+        # Clear options that are chosen but not wanted: Select() alone does not always do it.
+        for child in e.walk():
+            if child.role == "listitem" and child.selected and child.name not in wanted and child.handle is not None:
+                self._pattern(child, UIA.UIA_SelectionItemPatternId, UIA.IUIAutomationSelectionItemPattern,
+                              lambda p: p.RemoveFromSelection())
+        for n, option in enumerate(wanted):
+            condition = self._uia.CreateAndCondition(
+                self._uia.CreatePropertyCondition(UIA.UIA_ControlTypePropertyId, 50007),
+                self._uia.CreatePropertyCondition(UIA.UIA_NamePropertyId, option))
+            item = e.handle.FindFirst(UIA.TreeScope_Descendants, condition)
+            if not item:
+                raise RuntimeError(f'list "{e.title}" has no option "{option}"')
+            call = (lambda p: p.Select()) if n == 0 else (lambda p: p.AddToSelection())
+            if not self._pattern(item, UIA.UIA_SelectionItemPatternId, UIA.IUIAutomationSelectionItemPattern, call):
+                raise RuntimeError(f'could not select "{option}" in list "{e.title}"')
+        return "uia.select"
 
     def read_value(self, e: Element) -> Optional[str]:
         """The value a field holds right now, or None if it cannot be read."""
@@ -347,6 +508,11 @@ class WindowsDriver:
             return self._mouse_click(e, double=action == "doubleclick",
                                      button="right" if action == "rightclick" else "left")
 
+        if action == "type" and tree_backed:
+            parts = _date_parts(e)
+            if parts:
+                return self._set_date(e, parts, value or "")
+
         if action in ("type", "append"):
             text = value or ""
             if action == "type" and tree_backed and "value" in e.patterns and not e.readonly \
@@ -370,6 +536,9 @@ class WindowsDriver:
             win_input.type_text(text)
             return "keys"
 
+        if action == "toggle" and e.role == "switch" and tree_backed and "toggle" not in e.patterns:
+            return self._mouse_click(e)
+
         if action == "toggle":
             if tree_backed and self._pattern(e, UIA.UIA_TogglePatternId, UIA.IUIAutomationTogglePattern,
                                              lambda p: p.Toggle()):
@@ -378,6 +547,12 @@ class WindowsDriver:
 
         if action == "select" and e.role == "dropdown" and tree_backed:
             return self._select_option(e, value or "")
+
+        if action == "select" and e.role == "list" and tree_backed:
+            return self._select_many(e, value or "")
+
+        if action == "set":
+            return self._set_number(e, value)
 
         if action == "select":
             if tree_backed and self._pattern(e, UIA.UIA_SelectionItemPatternId,

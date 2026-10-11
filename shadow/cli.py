@@ -152,7 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("act", help="perform an action on an element")
     a.add_argument("index", type=int)
     a.add_argument("action", choices=["click", "doubleclick", "rightclick", "type", "append", "toggle",
-                                      "select", "expand", "collapse", "focus", "scroll", "click_at", "drag"])
+                                      "select", "expand", "collapse", "focus", "scroll", "click_at", "drag",
+                                      "set"])
     a.add_argument("value", nargs="?")
 
     k = sub.add_parser("key", help="press a key or combination, e.g. ctrl+s")

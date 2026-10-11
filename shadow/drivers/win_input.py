@@ -339,6 +339,42 @@ def _print_window(hwnd: int):
         user32.ReleaseDC(hwnd, window_dc)
 
 
+def child_windows(hwnd: int, class_name: str) -> list[int]:
+    found: list[int] = []
+
+    @_WNDENUMPROC
+    def callback(child, _lparam):
+        if _text(user32.GetClassNameW, child) == class_name:
+            found.append(int(child))
+        return True
+
+    user32.EnumChildWindows.argtypes = [wintypes.HWND, _WNDENUMPROC, wintypes.LPARAM]
+    user32.EnumChildWindows(hwnd, callback, 0)
+    return found
+
+
+def wake_accessibility(hwnd: int) -> bool:
+    """Ask a Chromium window (Chrome, Edge, Electron apps) for its accessibility object.
+
+    Chromium only builds the accessibility tree of a web page once it sees an assistive
+    tool asking for it; until then the page is one blank pane. Requesting the client
+    object of each page surface is the signal screen readers use."""
+    import comtypes
+    from comtypes.automation import IDispatch  # noqa: F401  (loads the type library)
+
+    oleacc = ctypes.WinDLL("oleacc")
+    iid = comtypes.GUID("{618736E0-3C3D-11CF-810C-00AA00389B71}")  # IID_IAccessible
+    woke = False
+    for child in child_windows(hwnd, "Chrome_RenderWidgetHostHWND"):
+        pointer = ctypes.c_void_p()
+        if oleacc.AccessibleObjectFromWindow(wintypes.HWND(child), wintypes.DWORD(0xFFFFFFFC),
+                                             ctypes.byref(iid), ctypes.byref(pointer)) == 0:
+            woke = True
+            if pointer.value:
+                ctypes.cast(pointer, ctypes.POINTER(comtypes.IUnknown)).Release()
+    return woke
+
+
 def foreground() -> int:
     return int(user32.GetForegroundWindow() or 0)
 

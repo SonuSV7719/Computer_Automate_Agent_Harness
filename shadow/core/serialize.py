@@ -12,7 +12,7 @@ SKIP_ROLES = {"scrollbar", "thumb", "separator", "tooltip"}
 # Children of these add nothing the parent line does not already say.
 LEAF_ROLES = {
     "button", "checkbox", "radio", "link", "input", "dropdown", "slider",
-    "spinner", "splitbutton", "progressbar", "image", "text",
+    "spinner", "splitbutton", "progressbar", "image", "text", "switch", "heading",
 }
 STRUCT_ALWAYS = {
     "window", "dialog", "menu", "menubar", "toolbar", "tab", "list", "tree",
@@ -20,7 +20,7 @@ STRUCT_ALWAYS = {
 }
 # Shown only when named or interactive; otherwise their children are promoted.
 FLATTEN = {"pane", "group", "custom", "document", "header", "appbar", "titlebar"}
-NEEDS_LABEL = {"input", "dropdown", "spinner", "slider", "checkbox", "radio", "document"}
+NEEDS_LABEL = {"input", "dropdown", "spinner", "slider", "checkbox", "radio", "document", "switch", "list"}
 COUNT_HIDDEN = {"list", "tree", "table"}
 
 MAX_TEXT = 80
@@ -94,6 +94,11 @@ def describe(e: Element, with_index: bool = True) -> str:
     flags = []
     if e.checked:
         flags.append(e.checked)
+    if e.value_range:
+        flags.append(f"range {e.value_range[0]}-{e.value_range[1]}")
+    if "multiselect" in e.patterns:
+        chosen = [c.name for c in e.children if c.selected and c.name]
+        flags.append("several allowed" + (f", chosen: {' | '.join(chosen)}" if chosen else ""))
     if e.source == "merged" and e.confidence is not None and e.role != "region":
         flags.append(f"read by ocr {e.confidence:.2f}")
     if e.selected:

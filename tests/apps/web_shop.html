@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shop and Forms Test</title>
+<style>
+  body { font: 15px "Segoe UI", sans-serif; margin: 16px; background: #f6f6f6; }
+  section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+  label { display: inline-block; min-width: 130px; }
+  .row { margin: 6px 0; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid #ccc; padding: 4px 10px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 220px); gap: 12px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff; }
+  .card .img { height: 60px; background: #e8eef7; display: flex; align-items: center; justify-content: center; }
+  .price { font-weight: 700; font-size: 18px; }
+  .mrp { text-decoration: line-through; color: #777; }
+  #feed { height: 160px; overflow-y: auto; border: 1px solid #ccc; }
+  #feed div { padding: 6px; border-bottom: 1px solid #eee; }
+</style>
+</head>
+<body>
+<h1>Shop and Forms Test</h1>
+
+<section aria-label="Every form control">
+  <h2>Profile form</h2>
+  <div class="row"><label for="name">Full name</label><input id="name" type="text"></div>
+  <div class="row"><label for="pw">Password</label><input id="pw" type="password"></div>
+  <div class="row"><label for="email">Email</label><input id="email" type="email"></div>
+  <div class="row"><label for="age">Age</label><input id="age" type="number" min="0" max="120"></div>
+  <div class="row"><label for="dob">Date of birth</label><input id="dob" type="date"></div>
+  <div class="row"><label for="bio">About you</label><textarea id="bio" rows="2" cols="30"></textarea></div>
+  <div class="row"><label for="country">Country</label>
+    <select id="country"><option>Choose...</option><option>India</option><option>Japan</option><option>Singapore</option></select></div>
+  <div class="row"><label for="langs">Languages</label>
+    <select id="langs" multiple size="4"><option>English</option><option>Hindi</option><option>Japanese</option><option>Tamil</option></select></div>
+  <div class="row"><label for="city">City</label><input id="city" list="cities"><datalist id="cities"><option>Chennai</option><option>Tokyo</option></datalist></div>
+  <div class="row" role="radiogroup" aria-label="Plan">
+    <span>Plan</span>
+    <label><input type="radio" name="plan" value="free" checked> Free</label>
+    <label><input type="radio" name="plan" value="pro"> Pro</label>
+    <label><input type="radio" name="plan" value="team"> Team</label></div>
+  <div class="row"><label><input id="news" type="checkbox"> Send me the newsletter</label></div>
+  <div class="row"><label for="volume">Volume</label><input id="volume" type="range" min="0" max="100" value="20"></div>
+  <div class="row"><label for="dark">Dark mode</label><button id="dark" role="switch" aria-checked="false" aria-label="Dark mode">Off</button></div>
+  <div class="row"><button id="submit">Submit profile</button></div>
+  <div id="result" role="status">Not submitted</div>
+</section>
+
+<section aria-label="Orders table">
+  <h2>Orders</h2>
+  <table id="orders" aria-label="Orders">
+    <thead><tr><th>Order</th><th>Customer</th><th>Amount</th><th>Status</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="row"><button id="prev">Previous</button> <span id="pageinfo" role="status"></span> <button id="next">Next</button></div>
+</section>
+
+<section aria-label="Activity feed">
+  <h2>Activity feed</h2>
+  <div id="feed" role="list" aria-label="Activity feed" tabindex="0"></div>
+</section>
+
+<section aria-label="Results">
+  <h2>Results</h2>
+  <div class="grid" id="products"></div>
+  <div class="row"><button id="pprev">Previous page</button> <span id="ppage" role="status"></span> <button id="pnext">Next page</button></div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+// ---- form ----
+$("dark").onclick = () => { const on = $("dark").getAttribute("aria-checked") !== "true";
+  $("dark").setAttribute("aria-checked", on); $("dark").textContent = on ? "On" : "Off"; };
+$("submit").onclick = () => {
+  const plan = document.querySelector("input[name=plan]:checked").value;
+  const langs = [...$("langs").selectedOptions].map(o => o.text).join("+");
+  $("result").textContent = ["Submitted", $("name").value, $("email").value, $("age").value, $("dob").value,
+    $("country").value, langs, $("city").value, plan, $("news").checked ? "news" : "no-news", "vol=" + $("volume").value,
+    $("dark").getAttribute("aria-checked") === "true" ? "dark" : "light", "bio=" + $("bio").value].join(" | ");
+};
+// ---- orders: 23 rows, 10 per page ----
+const customers = ["Asha", "Bilal", "Chen", "Divya", "Emi", "Farah", "Gopal"];
+const statuses = ["Paid", "Pending", "Shipped"];
+const orders = Array.from({length: 23}, (_, i) => [`ORD-${1001 + i}`, customers[i % 7], (120 + i * 37).toFixed(2), statuses[i % 3]]);
+let page = 0;
+function renderOrders() {
+  const body = $("orders").tBodies[0]; body.innerHTML = "";
+  for (const row of orders.slice(page * 10, page * 10 + 10)) {
+    const tr = body.insertRow(); for (const v of row) tr.insertCell().textContent = v;
+  }
+  const pages = Math.ceil(orders.length / 10);
+  $("pageinfo").textContent = `Page ${page + 1} of ${pages}`;
+  $("prev").disabled = page === 0; $("next").disabled = page === pages - 1;
+}
+$("prev").onclick = () => { page--; renderOrders(); };
+$("next").onclick = () => { page++; renderOrders(); };
+renderOrders();
+// ---- feed: 40 items, loads 12 more as you scroll ----
+let shown = 0;
+function more() { for (let i = 0; i < 12 && shown < 40; i++, shown++) {
+  const d = document.createElement("div"); d.setAttribute("role", "listitem");
+  d.textContent = `Event ${shown + 1}: user${(shown * 7) % 13} updated record R-${500 + shown}`; $("feed").append(d); } }
+$("feed").onscroll = () => { const f = $("feed"); if (f.scrollTop + f.clientHeight >= f.scrollHeight - 4) more(); };
+more();
+// ---- products: 18 cards, 8 per page ----
+const names = ["Wireless Mouse", "USB-C Hub 7-in-1", "Mechanical Keyboard", "27 inch Monitor", "Laptop Stand",
+  "Noise Cancelling Headphones", "Webcam 1080p", "Portable SSD 1TB", "Desk Lamp LED", "Ergonomic Chair",
+  "HDMI Cable 2m", "Phone Holder", "Bluetooth Speaker", "Smart Watch", "Power Bank 20000mAh",
+  "Gaming Mousepad XL", "Router WiFi 6", "Microphone USB"];
+const products = names.map((n, i) => ({ name: n, price: 499 + i * 350, mrp: 899 + i * 420,
+  rating: (3.6 + (i % 5) * 0.3).toFixed(1), reviews: 120 + i * 53, url: `https://shop.example/p/${1000 + i}` }));
+let ppage = 0;
+const rupees = v => "₹" + v.toLocaleString("en-IN");
+function renderProducts() {
+  const grid = $("products"); grid.innerHTML = "";
+  for (const p of products.slice(ppage * 8, ppage * 8 + 8)) {
+    const card = document.createElement("div"); card.className = "card"; card.setAttribute("role", "group"); card.setAttribute("aria-label", p.name);
+    card.innerHTML = `<div class="img"><img alt="${p.name} photo" width="40" height="40" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='40' height='40' fill='%2399b'/%3E%3C/svg%3E"></div>
+      <a href="${p.url}">${p.name}</a>
+      <div><span aria-label="${p.rating} out of 5 stars">${"★".repeat(Math.round(p.rating))}</span> <span>(${p.reviews})</span></div>
+      <div><span class="price">${rupees(p.price)}</span> <span class="mrp">M.R.P. ${rupees(p.mrp)}</span></div>
+      <div>FREE delivery by Tomorrow</div><button>Add to cart</button>`;
+    grid.append(card);
+  }
+  const pages = Math.ceil(products.length / 8);
+  $("ppage").textContent = `Page ${ppage + 1} of ${pages}`;
+  $("pprev").disabled = ppage === 0; $("pnext").disabled = ppage === pages - 1;
+}
+$("pprev").onclick = () => { ppage--; renderProducts(); };
+$("pnext").onclick = () => { ppage++; renderProducts(); };
+renderProducts();
+</script>
+</body>
+</html>

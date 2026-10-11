@@ -289,7 +289,8 @@ class Engine:
             if action in ("click_at", "drag"):
                 _check_uncovered(before, element, value, self.driver)
             route = self.driver.perform(element, action, value)
-            self._verify_value(element, action, value)
+            if route != "uia.parts":  # a date set part by part is shown in the field's own format
+                self._verify_value(element, action, value)
 
         if expect or settle:
             after, met = self._settle(expect, timeout, cv)
@@ -321,7 +322,8 @@ class Engine:
     def _verify_value(self, element: Element, action: str, value: Optional[str]) -> None:
         """A typed or selected value must actually be in the field afterwards."""
         read = getattr(self.driver, "read_value", None)
-        if read is None or action not in ("type", "select") or element.masked or element.source != "tree":
+        if read is None or action not in ("type", "select") or element.masked or element.source != "tree" \
+                or element.role not in ("input", "document", "dropdown", "spinner"):
             return
         deadline = time.perf_counter() + VERIFY_TIMEOUT
         while True:  # browsers update their accessibility values a moment after the input changes

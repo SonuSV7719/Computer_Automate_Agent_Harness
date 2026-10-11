@@ -31,6 +31,7 @@ class Element:
     class_name: str = ""
     framework: str = ""
     confidence: Optional[float] = None  # CV elements only
+    value_range: Optional[tuple] = None  # (minimum, maximum) of a slider or spinner
     cv_confirmed: bool = False
     parent: Optional["Element"] = field(default=None, repr=False)
     children: list["Element"] = field(default_factory=list, repr=False)

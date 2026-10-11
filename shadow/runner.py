@@ -17,7 +17,7 @@ from .engine import Halted
 from .skill_api import ElRef
 
 ELEMENT_ACTIONS = ("click", "doubleclick", "rightclick", "type", "append", "select", "toggle",
-                   "expand", "collapse", "focus", "scroll", "click_at", "drag")
+                   "expand", "collapse", "focus", "scroll", "click_at", "drag", "set")
 ALWAYS_ALLOWED = {"click", "doubleclick", "rightclick", "focus", "scroll", "click_at", "drag"}
 LOCATE_TIMEOUT = 1.5
 POLL = 0.05
