@@ -44,9 +44,15 @@ def start_daemon(wait: float = 30.0) -> bool:
     HOME.mkdir(parents=True, exist_ok=True)
     log = open(HOME / "daemon.log", "ab")
     flags = 0
+    python = sys.executable
     if sys.platform == "win32":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    subprocess.Popen([sys.executable, "-m", "shadow.daemon"], stdout=log, stderr=log,
+        # pythonw has no console. With python.exe, a virtual environment's launcher starts a
+        # second process that opens its own terminal window, which can cover the target app.
+        windowless = Path(sys.executable).with_name("pythonw.exe")
+        if windowless.exists():
+            python = str(windowless)
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    subprocess.Popen([python, "-m", "shadow.daemon"], stdout=log, stderr=log,
                      stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True)
     deadline = time.time() + wait
     while time.time() < deadline:

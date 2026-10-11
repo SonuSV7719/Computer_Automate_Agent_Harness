@@ -90,6 +90,11 @@ class Runner:
                     how = "keys"
                 else:
                     snap = e.see(self.cv)
+                    # A check that already holds before the step cannot show the step worked.
+                    if spec and expectation.check(spec, snap):
+                        return {"status": "expect", "screen": snap.text, "body": snap.body,
+                                "detail": f"the expected result was already on screen before the step, "
+                                          f"so it cannot confirm it: {spec}"}
                     element, how = fingerprint.resolve(fp, snap)
                     if element is None:
                         if self.cv is False:

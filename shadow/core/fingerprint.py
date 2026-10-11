@@ -93,16 +93,46 @@ def _confirm(e: Element, fp: dict, skip: str) -> int:
     return score
 
 
-def _pick(candidates: list[Element], fp: dict, skip: str) -> Optional[Element]:
-    """Exactly one candidate, confirmed by a second property; otherwise none."""
+NEAR = 0.08        # a duplicate must be within this share of the window of where it was recorded
+CLEAR_GAP = 0.04   # and the next duplicate must be at least this much farther away
+
+
+def _distance(e: Element, fp: dict, snapshot: Snapshot) -> float:
+    """How far an element's centre is from the recorded one, as a share of the window."""
+    wl, wt, wr, wb = snapshot.window.box
+    ww, wh = max(1, wr - wl), max(1, wb - wt)
+    fx = (fp["rel_box"][0] + fp["rel_box"][2]) / 2
+    fy = (fp["rel_box"][1] + fp["rel_box"][3]) / 2
+    cx, cy = e.center
+    return max(abs((cx - wl) / ww - fx), abs((cy - wt) / wh - fy))
+
+
+def _pick(candidates: list[Element], fp: dict, skip: str, snapshot: Snapshot) -> tuple[Optional[Element], str]:
+    """One candidate, confirmed by a second property. Duplicates are told apart by where
+    the recorded one was; if that is not clear-cut, none is returned rather than a guess."""
     confirmed = [e for e in candidates if _confirm(e, fp, skip) >= 1]
     if len(confirmed) == 1:
-        return confirmed[0]
+        return confirmed[0], ""
     if len(confirmed) > 1 and fp.get("path"):
         same_path = [e for e in confirmed if ancestor_path(e) == fp["path"]]
         if len(same_path) == 1:
-            return same_path[0]
-    return None
+            return same_path[0], ""
+        confirmed = same_path or confirmed
+    if len(confirmed) > 1 and fp.get("rel_box"):
+        ranked = sorted(confirmed, key=lambda e: _distance(e, fp, snapshot))
+        nearest, runner_up = _distance(ranked[0], fp, snapshot), _distance(ranked[1], fp, snapshot)
+        if nearest <= NEAR and runner_up - nearest >= max(CLEAR_GAP, nearest):
+            return ranked[0], "+position"
+    return None, ""
+
+
+def _by_text(pool: list[Element], role: str, field: str, wanted: str, fuzzy: bool) -> list[Element]:
+    """Elements whose text matches exactly; only if there are none, ones that match after
+    folding OCR look-alikes. So "Box 2" never settles for "Box Z" when a real "Box 2" exists."""
+    exact = [e for e in pool if e.role == role and _same_text(getattr(e, field), wanted)]
+    if exact or not fuzzy:
+        return exact
+    return [e for e in pool if e.role == role and _same_text(getattr(e, field), wanted, True)]
 
 
 def resolve(fp: dict, snapshot: Snapshot) -> tuple[Optional[Element], str]:
@@ -111,21 +141,19 @@ def resolve(fp: dict, snapshot: Snapshot) -> tuple[Optional[Element], str]:
     fuzzy = fp.get("source", "tree") != "tree"
 
     if fp.get("automation_id"):
-        hit = _pick([e for e in pool if e.automation_id == fp["automation_id"]], fp, "automation_id")
+        hit, how = _pick([e for e in pool if e.automation_id == fp["automation_id"]], fp, "automation_id", snapshot)
         if hit:
-            return hit, "automation_id"
+            return hit, "automation_id" + how
 
     if fp.get("name"):
-        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.name, fp["name"], fuzzy)],
-                    fp, "role")
+        hit, how = _pick(_by_text(pool, fp["role"], "name", fp["name"], fuzzy), fp, "role", snapshot)
         if hit:
-            return hit, "role+name"
+            return hit, "role+name" + how
 
     if fp.get("label"):
-        hit = _pick([e for e in pool if e.role == fp["role"] and _same_text(e.label, fp["label"], fuzzy)],
-                    fp, "role")
+        hit, how = _pick(_by_text(pool, fp["role"], "label", fp["label"], fuzzy), fp, "role", snapshot)
         if hit:
-            return hit, "role+label"
+            return hit, "role+label" + how
 
     # Unnamed element: same role, same container, close to where it was.
     if not fp.get("name") and not fp.get("label") and fp.get("path"):

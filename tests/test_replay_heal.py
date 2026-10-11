@@ -151,3 +151,16 @@ def test_irreversible_step_is_never_auto_healed(engine, driver):
     called = []
     result = run_skill(skill, code, direct(engine), {"amount": "9000"}, lambda p: called.append(p) or {})
     assert result["status"] == "needs_human" and called == []
+
+
+def test_a_check_that_is_already_true_does_not_pass_a_step(engine, driver):
+    """If "Saved INV-1" is still on screen from last time, clicking Save again proves nothing."""
+    skill, code = compiled(engine)  # leaves "Saved INV-1042" in the status line
+    assert driver.status == "Saved INV-1042"
+    driver.save_enabled = True
+    original = driver._save
+    driver._save = lambda: None  # the app silently ignores the click this time
+    result = run_skill(skill, code, direct(engine), {"invoice_no": "INV-1042"})
+    driver._save = original
+    assert result["status"] == "needs_human"
+    assert "already on screen before the step" in result["error"]

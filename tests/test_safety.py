@@ -71,3 +71,51 @@ def test_a_typed_password_is_never_recorded():
     code = render_code(compile_trace(trace, "login"))
     assert "s3cret-value" not in str(trace) and "s3cret-value" not in code
     assert "def run(h, password=''):" in code  # asked for at run time instead
+
+
+def test_a_canvas_position_under_a_floating_panel_is_refused():
+    """Excalidraw shows a properties panel over the left of its canvas once a tool is picked."""
+    from shadow.core.elements import WindowInfo
+
+    class Board:
+        def __init__(self):
+            self.performed = []
+
+        def list_windows(self):
+            return [self.window_info(1)]
+
+        def foreground(self):
+            return 1
+
+        def exists(self, hwnd):
+            return True
+
+        def window_info(self, hwnd):
+            return WindowInfo(hwnd=1, title="Board", process="chrome.exe", pid=1, box=(0, 0, 1000, 800))
+
+        def tree(self, hwnd):
+            root = Element(role="window", name="Board", box=(0, 0, 1000, 800), root_hwnd=1)
+            doc = Element(role="document", name="Board", box=(0, 0, 1000, 800), parent=root, root_hwnd=1)
+            canvas = Element(role="region", box=(0, 0, 1000, 800), source="merged", actions=["click_at", "drag"],
+                             parent=doc, root_hwnd=1)
+            panel = Element(role="button", name="Stroke colour", box=(20, 100, 220, 500), actions=["click"],
+                            parent=doc, root_hwnd=1)
+            doc.children = [canvas, panel]
+            root.children = [doc]
+            return [root]
+
+        def perform(self, element, action, value=None):
+            self.performed.append((action, value))
+            return "mouse"
+
+    board = Board()
+    engine = Engine(board, cv=False)
+    snap = engine.see()
+    region = next(e.index for e in snap.elements if e.role == "region")
+    with pytest.raises(ValueError, match='position 150,250 is covered by button "Stroke colour"'):
+        engine.act("drag", region, "150,250 350,420", snapshot_id=snap.id)
+    with pytest.raises(ValueError, match="covered by"):
+        engine.act("click_at", region, "100,300", snapshot_id=snap.id)
+    assert board.performed == []
+    assert engine.act("drag", region, "400,250 600,420", snapshot_id=snap.id, settle=False)["ok"]
+    assert board.performed == [("drag", "400,250 600,420")]

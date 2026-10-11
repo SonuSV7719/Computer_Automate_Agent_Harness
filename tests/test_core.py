@@ -139,16 +139,73 @@ def test_fingerprint_does_not_guess_when_element_is_gone(engine, driver):
     assert found is None and how == "not found"
 
 
-def test_ambiguous_match_is_rejected():
-    a = Element(role="button", name="Delete", box=(0, 0, 50, 20), actions=["click"])
-    b = Element(role="button", name="Delete", box=(0, 40, 50, 60), actions=["click"])
-    roots = tree(a, b)
+def _canvas(*labels):
+    """A canvas region holding pixel-read labels: (text, left, top)."""
     from shadow.core.elements import Snapshot
-    snap = Snapshot(id=1, window=WIN, roots=roots)
-    snap.header, snap.body, snap.elements = serialize(roots, WIN, 1)
-    fp = fingerprint.make(a, snap)
-    found, _ = fingerprint.resolve(fp, snap)
-    assert found is None  # two identical buttons: refuse rather than click the wrong one
+    window = WindowInfo(hwnd=1, title="Board", process="chrome.exe", pid=1, box=(0, 0, 1000, 800))
+    root = Element(role="window", name="Board", box=(0, 0, 1000, 800))
+    region = Element(role="region", box=(0, 0, 1000, 800), source="merged", actions=["click_at", "drag"], parent=root)
+    root.children.append(region)
+    for text, left, top in labels:
+        region.children.append(Element(role="text", name=text, box=(left, top, left + 120, top + 24),
+                                       source="cv", confidence=0.98, parent=region))
+    snap = Snapshot(id=1, window=window, roots=[root])
+    snap.header, snap.body, snap.elements = serialize([root], window, 1)
+    return snap
+
+
+def named(snap, text, n=0):
+    return [e for e in snap.elements if e.name == text][n]
+
+
+def test_two_identical_buttons_side_by_side_are_refused():
+    """Same name, same place within the tolerance: no property tells them apart."""
+    snap = _canvas(("Delete", 100, 100), ("Delete", 130, 110))
+    fp = fingerprint.make(named(snap, "Delete"), snap)
+    found, how = fingerprint.resolve(fp, snap)
+    assert found is None and how == "not found"  # refuse rather than click the wrong one
+
+
+def test_similar_names_never_cross_match():
+    snap = _canvas(("Invoice Box", 100, 100), ("Invoice Box 2", 500, 100), ("Invoice Bax", 100, 400))
+    for wanted in ("Invoice Box", "Invoice Box 2", "Invoice Bax"):
+        found, how = fingerprint.resolve(fingerprint.make(named(snap, wanted), snap), snap)
+        assert found is named(snap, wanted) and how == "role+name"
+
+
+def test_an_exact_match_wins_over_an_ocr_look_alike():
+    """OCR folds 2 and Z together, but a real "Box 2" on screen must beat a "Box Z"."""
+    snap = _canvas(("Box Z", 100, 100), ("Box 2", 500, 100))
+    fp = fingerprint.make(named(snap, "Box 2"), snap)
+    assert fingerprint.resolve(fp, snap)[0] is named(snap, "Box 2")
+    later = _canvas(("Box Z", 100, 100), ("Box Z", 500, 100))  # this run OCR misread the 2 as Z
+    found, how = fingerprint.resolve(fp, later)
+    assert found is named(later, "Box Z", 1) and how == "role+name+position"
+
+
+def test_exact_duplicates_are_told_apart_by_where_the_recorded_one_was():
+    snap = _canvas(("Invoice Box", 100, 100), ("Invoice Box", 600, 500))
+    first, second = named(snap, "Invoice Box", 0), named(snap, "Invoice Box", 1)
+    for wanted in (first, second):
+        found, how = fingerprint.resolve(fingerprint.make(wanted, snap), snap)
+        assert found is wanted and how == "role+name+position"
+
+
+def test_duplicates_still_resolve_after_a_small_move_or_a_new_duplicate():
+    snap = _canvas(("Invoice Box", 100, 100), ("Invoice Box", 600, 500))
+    fp = fingerprint.make(named(snap, "Invoice Box", 1), snap)
+    moved = _canvas(("Invoice Box", 100, 100), ("Invoice Box", 630, 520), ("Invoice Box", 100, 600))
+    found, how = fingerprint.resolve(fp, moved)
+    assert found.box[:2] == (630, 520) and how == "role+name+position"
+
+
+def test_duplicates_that_can_no_longer_be_told_apart_are_refused():
+    snap = _canvas(("Invoice Box", 100, 100), ("Invoice Box", 600, 500))
+    fp = fingerprint.make(named(snap, "Invoice Box", 1), snap)
+    far = _canvas(("Invoice Box", 100, 100), ("Invoice Box", 850, 700))       # the recorded one moved far away
+    assert fingerprint.resolve(fp, far)[0] is None
+    swapped = _canvas(("Invoice Box", 560, 470), ("Invoice Box", 640, 530))   # two candidates equally close
+    assert fingerprint.resolve(fp, swapped)[0] is None
 
 
 def test_volatile_automation_ids_are_dropped():

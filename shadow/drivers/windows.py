@@ -241,6 +241,17 @@ class WindowsDriver:
             points.append((round(l + (r - l) * fx / 1000), round(t + (b - t) * fy / 1000)))
         return points
 
+    def element_at(self, x: int, y: int) -> Optional[dict]:
+        """What the application itself reports under a screen point (live hit-testing)."""
+        from ctypes import wintypes
+        try:
+            el = self._uia.ElementFromPoint(wintypes.POINT(int(x), int(y)))
+            rect = el.CurrentBoundingRectangle
+            return {"role": ROLES.get(el.CurrentControlType, "custom"), "name": (el.CurrentName or "").strip(),
+                    "box": (rect.left, rect.top, rect.right, rect.bottom)}
+        except Exception:
+            return None
+
     def read_value(self, e: Element) -> Optional[str]:
         """The value a field holds right now, or None if it cannot be read."""
         if "value" not in e.patterns or e.handle is None:

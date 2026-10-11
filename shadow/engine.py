@@ -40,6 +40,52 @@ def _counters(before: Snapshot, after: Snapshot) -> list[str]:
     return [name for name in _new_text(before, after) if _DIGITS.sub("#", name) in shapes]
 
 
+def _check_uncovered(snapshot: Snapshot, region: Element, value: Optional[str], driver=None) -> None:
+    """A position inside a region must be on the region itself. Whiteboards float toolbars
+    and side panels over their canvas; pressing there would operate the panel, not draw."""
+    token = (value or "").replace(";", " ").split()[:1]
+    if not token or "," not in token[0]:
+        return  # the driver reports malformed positions
+    try:
+        fx, fy = (float(part) for part in token[0].split(",", 1))
+    except ValueError:
+        return
+    l, t, r, b = region.box
+    x, y = l + (r - l) * fx / 1000, t + (b - t) * fy / 1000
+
+    def refuse(role: str, name: str) -> None:
+        what = f'{role} "{name}"' if name else role
+        raise ValueError(f"position {token[0]} is covered by {what}; choose a point on the open "
+                         f"part of the region")
+
+    hit_test = getattr(driver, "element_at", None)
+    if hit_test is not None:
+        # Ask the application what is under the point right now. The tree can hold stale
+        # entries (a text editor that has already closed), so its geometry is not proof.
+        hit = hit_test(x, y)
+        if hit is None:
+            return
+        hl, ht, hr, hb = hit["box"]
+        area = max(0, hr - hl) * max(0, hb - ht)
+        # Anything clearly smaller than the region is something lying on top of it: a
+        # button, or the unnamed body of a floating panel.
+        if area < 0.9 * region.area:
+            refuse(hit["role"], hit["name"])
+        return
+
+    ancestors = set()
+    node = region.parent
+    while node is not None:
+        ancestors.add(id(node))
+        node = node.parent
+    for other in snapshot.elements:
+        if other is region or id(other) in ancestors or other.source == "cv" or other.offscreen:
+            continue
+        ol, ot, o_r, ob = other.box
+        if ol <= x <= o_r and ot <= y <= ob and other.area < 0.9 * region.area:
+            refuse(other.role, other.title)
+
+
 class StaleSnapshot(Exception):
     pass
 
@@ -190,14 +236,18 @@ class Engine:
         """Wait for the expected result, or for the screen to stop changing."""
         deadline = time.perf_counter() + (timeout if spec else SETTLE_TIMEOUT)
         previous_body = None
+        reads = 0
         while True:
             snap = self.see(cv)
+            reads += 1
             if spec:
                 if expectation.check(spec, snap):
                     return snap, True
             elif snap.body == previous_body:
                 return snap, None
-            if time.perf_counter() >= deadline:
+            # A slow read (vision on a large canvas) can use up the whole timeout while showing
+            # the screen as it was just after the action. Never give up on a single read.
+            if time.perf_counter() >= deadline and (reads >= 2 or not spec):
                 return snap, (False if spec else None)
             previous_body = snap.body
             time.sleep(POLL)
@@ -236,6 +286,8 @@ class Engine:
                 raise ValueError(f"action '{action}' needs an element index")
             element = before.get(index)
             fp = fingerprint.make(element, before)
+            if action in ("click_at", "drag"):
+                _check_uncovered(before, element, value, self.driver)
             route = self.driver.perform(element, action, value)
             self._verify_value(element, action, value)
 
