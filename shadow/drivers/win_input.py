@@ -107,14 +107,20 @@ def _mouse(flags: int, data: int = 0) -> INPUT:
     return INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(dwFlags=flags, mouseData=data & 0xFFFFFFFF))
 
 
-def click(x: int, y: int, button: str = "left", double: bool = False) -> None:
+def click(x: int, y: int, button: str = "left", double: bool = False, hold: str = "") -> None:
+    """Click at a point; `hold` keeps keys down meanwhile, e.g. "ctrl" to add to a selection."""
+    held = [VK[k] for k in hold.lower().split("+") if k] if hold else []
     user32.SetCursorPos(int(x), int(y))
     time.sleep(0.02)
+    if held:
+        _send(*[_key(vk=c) for c in held])
     down, up = ((MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP) if button == "right"
                 else (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP))
     _send(_mouse(down), _mouse(up))
     if double:
         _send(_mouse(down), _mouse(up))
+    if held:
+        _send(*[_key(vk=c, flags=KEYEVENTF_KEYUP) for c in reversed(held)])
 
 
 def drag(points: list[tuple[int, int]], steps: int = 12) -> None:

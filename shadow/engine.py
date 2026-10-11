@@ -291,7 +291,15 @@ class Engine:
                 _check_uncovered(before, element, value, self.driver)
             route = self.driver.perform(element, action, value)
             if route != "uia.parts":  # a date set part by part is shown in the field's own format
-                self._verify_value(element, action, value)
+                try:
+                    self._verify_value(element, action, value)
+                except RuntimeError:
+                    retype = getattr(self.driver, "type_with_keys", None)
+                    if action != "type" or retype is None or route == "keys":
+                        raise
+                    # The direct route did not stick (common in older controls): type it for real.
+                    route = retype(element, value or "")
+                    self._verify_value(element, action, value, typed=True)
 
         if expect or settle:
             after, met = self._settle(expect, timeout, cv)
@@ -320,17 +328,27 @@ class Engine:
             "element": element.to_dict() if element else None,
         }
 
-    def _verify_value(self, element: Element, action: str, value: Optional[str]) -> None:
-        """A typed or selected value must actually be in the field afterwards."""
+    def _verify_value(self, element: Element, action: str, value: Optional[str], typed: bool = False) -> None:
+        """A typed or selected value must actually be in the field afterwards.
+
+        `typed` means real keystrokes were used: then a field that reports nothing at all
+        (a composite such as a number box) cannot be checked, which is not a failure; its
+        inner text box is checked instead when it has one."""
         read = getattr(self.driver, "read_value", None)
         if read is None or action not in ("type", "select") or element.masked or element.source != "tree" \
                 or element.role not in ("input", "document", "dropdown", "spinner"):
             return
+        want = textmatch.squash(value or "")
         deadline = time.perf_counter() + VERIFY_TIMEOUT
         while True:  # browsers update their accessibility values a moment after the input changes
             shown = read(element)
-            if shown is None or textmatch.squash(shown) == textmatch.squash(value or ""):
+            if shown is None or textmatch.squash(shown) == want:
                 return
+            if typed and shown == "":
+                inner = [read(c) for c in element.walk() if c is not element and c.role in ("input", "spinner")]
+                if any(v is not None and textmatch.squash(v) == want for v in inner) or \
+                        all(v in (None, "") for v in inner):
+                    return
             if time.perf_counter() >= deadline:
                 raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
             time.sleep(0.05)
@@ -369,6 +387,15 @@ class Engine:
                 return node.index
             node = node.parent
         return next((e.index for e in snap.elements if "scroll" in e.patterns and e.role == "document"), None)
+
+    def _unrecorded(self, work):
+        """Run `work` without recording the clicks and scrolls it makes: an extraction is
+        recorded as one step that pages by itself when replayed."""
+        recording, self.recording = self.recording, False
+        try:
+            return work()
+        finally:
+            self.recording = recording
 
     def _record(self, action: str, element: Optional[Element], snap: Snapshot, options: dict) -> None:
         if self.recording:
@@ -410,7 +437,9 @@ class Engine:
             return extract.read_table(found)["rows"] if found is not None else None
 
         scroller = (lambda s: self._scroll_target(s, locate(s))) if scroll else None
-        result = extract.collect(lambda fn: fn(self), read, next, scroller, max_pages)
+        from_tree = all(e.source == "tree" for e in table.walk())  # no vision needed to read it
+        result = self._unrecorded(lambda: extract.collect(lambda fn: fn(self), read, next, scroller, max_pages,
+                                                          cv=False if from_tree else None))
         self._record("extract_table", table, snap, {"next": next, "scroll": scroll} if next or scroll else {})
         return {"name": first["name"], "columns": first["columns"], "rows": result["records"],
                 "pages": result["pages"], "scrolls": result["scrolls"], "stopped": result["stopped"],
@@ -453,13 +482,17 @@ class Engine:
                         return extract.read_items(members)
             found = [g for g in extract.find_item_groups(s.roots, minimum=1)
                      if extract._similar(extract.shape_of(g[1]), reference)]
+            found.sort(key=lambda g: -len(g[1]))
             return extract.read_items(found[0][1]) if found else None
 
         def scroller(s: Snapshot):
             target = fingerprint.resolve(anchor, s)[0] if anchor else None
             return self._scroll_target(s, target or chosen[0])
 
-        result = extract.collect(lambda fn: fn(self), read, next, scroller if scroll else None, max_pages)
+        from_tree = all(e.source == "tree" for m in chosen[1] for e in m.walk())
+        result = self._unrecorded(lambda: extract.collect(lambda fn: fn(self), read, next,
+                                                          scroller if scroll else None, max_pages,
+                                                          cv=False if from_tree else None))
         self._record("extract_items", chosen[0] if chosen[0].index >= 0 else None, snap,
                      {"next": next, "scroll": scroll} if next or scroll else {})
         items = result["records"]

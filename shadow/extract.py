@@ -25,7 +25,10 @@ COUNT = re.compile(r"^\(?\s*([\d,]+(?:\.\d+)?[kKmM]?)\s*\)?\s*(?:ratings?|review
 
 # ---- reading text ------------------------------------------------------------------------
 def text_of(e: Element) -> str:
-    """What an element shows: its name, else its value, else the text inside it."""
+    """What an element shows: its name, else its value, else the text inside it.
+    A grid cell's value is its content; its name is often just a label such as "Amount Row 3"."""
+    if e.role == "cell" and e.value is not None:
+        return "" if e.value.strip().casefold() in NULLS else e.value
     if e.name:
         return e.name
     if e.value:
@@ -35,6 +38,33 @@ def text_of(e: Element) -> str:
 
 
 # ---- tables ------------------------------------------------------------------------------
+NULLS = {"(null)", "null", "none"}
+
+
+def normalize_table(table: Element) -> None:
+    """Give any grid the same shape: rows, with header items or cells inside.
+
+    Older grids (WinForms DataGridView, MSAA list views) expose rows as generic elements
+    named "Row 3" and cells as data items named "Customer Row 3" holding the data in their
+    value; HTML tables already arrive as rows and cells."""
+    for child in table.children:
+        kids = child.children
+        if len(kids) < 2:
+            continue
+        if all(k.role in ("header", "headeritem") for k in kids):
+            child.role = "row"
+            for k in kids:
+                k.role = "headeritem"
+        elif child.role in ("custom", "row", "listitem", "group", "pane") and \
+                sum(1 for k in kids if k.role in ("row", "cell", "custom", "text", "input")) >= 0.6 * len(kids):
+            child.role = "row"
+            for k in kids:
+                if k.role in ("row", "custom", "text", "input"):
+                    k.role = "cell"
+    for header in [c for c in table.children if c.role == "header"]:
+        for k in header.children:
+            k.role = "headeritem"
+
 def _rows_of(table: Element) -> list[Element]:
     rows: list[Element] = []
 
@@ -135,7 +165,9 @@ def _similar(a: Counter, b: Counter) -> bool:
         return False
     same = sum(min(a[k], b[k]) for k in keys)
     total = sum(max(a[k], b[k]) for k in keys)
-    return set(a) == set(b) or same / total >= 0.7
+    # Same kinds of content in similar amounts. A wrapper holding two cards has the same
+    # kinds as one card but twice as much, and must not pass for a card.
+    return same / total >= 0.7 or (set(a) == set(b) and same / total >= 0.6)
 
 
 def _fields_in(item: Element) -> int:
@@ -218,8 +250,11 @@ def read_item(item: Element) -> dict:
     texts = [t for t in texts if _meaningful(t) and not (t in seen or seen.add(t))]
     record: dict = {}
     title = next((h for h in headings), None) or next((name for name, _ in links if len(name) > 3), None)
-    if not title and texts:
-        title = max(texts, key=len)
+    if not title and item.name and not _is_detail(item.name):
+        title = item.name  # the card's own accessible name
+    if not title:
+        plain = [t for t in texts if not _is_detail(t)]
+        title = plain[0] if plain else (texts[0] if texts else None)
     if title:
         record["title"] = title
     url = next((u for _, u in links if u.startswith(("http", "/", "file:"))), None)
@@ -247,6 +282,11 @@ def read_item(item: Element) -> dict:
         record["actions"] = buttons
     record["texts"] = texts
     return record
+
+
+def _is_detail(text: str) -> bool:
+    """A price, rating or count rather than a name."""
+    return bool(PRICE.search(text) or RATING.search(text) or COUNT.match(text.strip()))
 
 
 def _meaningful(text: str) -> bool:
@@ -279,7 +319,7 @@ def find_control(snapshot: Snapshot, name: str) -> Optional[Element]:
 
 def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_name: Optional[str] = None,
             scroll: Optional[Callable[[Snapshot], Optional[int]]] = None, max_pages: int = 50,
-            max_scrolls: int = 40, wait: float = 8.0) -> dict:
+            max_scrolls: int = 40, wait: float = 8.0, cv: Optional[bool] = None) -> dict:
     """Read records page after page and/or scroll after scroll, without duplicates.
 
     `read(snapshot)` returns this page's records (None if the data is gone). `scroll`
@@ -300,7 +340,10 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
                 fresh += 1
         return fresh
 
-    snap = call(lambda e: e.see())
+    def look(e):
+        return e.see(cv)
+
+    snap = call(look)
     first = read(snap)
     if first is None:
         return {"records": [], "pages": 0, "scrolls": 0, "stopped": "nothing to read"}
@@ -316,7 +359,7 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
                 before = [_key(r) for r in (read(snap) or [])]
                 call(lambda e, t=target, s=snap.id: e.act("scroll", index=t, value="down 5", snapshot_id=s, settle=False))
                 scrolls += 1
-                snap = _wait_for_change(call, read, before, wait=2.5)
+                snap = _wait_for_change(call, read, before, wait=2.5, look=look)
                 if add(read(snap)):
                     idle = 0
                 elif call(lambda e, t=scroll(snap): t is None or e.at_bottom(t)):
@@ -329,7 +372,7 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
         if control is not None and control.index < 0 and control.enabled:
             # Out of view (below the fold, inside a scrolled panel): scroll to it first.
             call(lambda e, c=control: e.reveal(c))
-            snap = call(lambda e: e.see())
+            snap = call(look)
             control = find_control(snap, next_name)
         if control is None or not control.enabled:
             stopped = f'no enabled "{next_name}" control'
@@ -339,7 +382,7 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
             break
         before = [_key(r) for r in (read(snap) or [])]
         call(lambda e, i=control.index, s=snap.id: e.act("click", index=i, snapshot_id=s, settle=False))
-        snap = _wait_for_change(call, read, before, wait)
+        snap = _wait_for_change(call, read, before, wait, look=look)
         batch = read(snap)
         if batch is None or [_key(r) for r in batch] == before:
             stopped = "the next page did not change the data"
@@ -351,11 +394,19 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
     return {"records": records, "pages": pages, "scrolls": scrolls, "stopped": stopped}
 
 
-def _wait_for_change(call, read, before: list, wait: float) -> Snapshot:
+def _wait_for_change(call, read, before: list, wait: float, look=None) -> Snapshot:
+    """Wait until the data differs from `before`, then until it stops changing: pages are
+    often filled in gradually, and reading too soon would miss the last items."""
     deadline = time.perf_counter() + wait
+    previous = None
+    look = look or (lambda e: e.see())
     while True:
-        snap = call(lambda e: e.see())
+        snap = call(look)
         now = [_key(r) for r in (read(snap) or [])]
-        if now != before or time.perf_counter() >= deadline:
+        changed = now != before
+        if changed and now == previous:
+            return snap  # changed, and the same on two reads in a row
+        if time.perf_counter() >= deadline:
             return snap
+        previous = now if changed else None
         time.sleep(0.15)

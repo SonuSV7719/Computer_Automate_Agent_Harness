@@ -46,6 +46,7 @@ CACHED_PROPERTIES = [
     P.UIA_RangeValueMinimumPropertyId, P.UIA_RangeValueMaximumPropertyId,
     P.UIA_IsSelectionPatternAvailablePropertyId, P.UIA_SelectionCanSelectMultiplePropertyId,
     P.UIA_IsGridItemPatternAvailablePropertyId, P.UIA_IsTableItemPatternAvailablePropertyId,
+    P.UIA_IsLegacyIAccessiblePatternAvailablePropertyId, P.UIA_LegacyIAccessibleValuePropertyId,
 ]
 # Web pages say exactly what an element is through its ARIA role; it is more precise than
 # the generic control type (a table cell and a table row are both "data items" otherwise).
@@ -60,6 +61,7 @@ PATTERN_TIMEOUT = 2.0
 
 
 DATE_PART_NAMES = {"day": "day", "month": "month", "year": "year"}
+LEGACY_FRAMEWORKS = {"WinForm", "Win32"}
 
 
 def _date_parts(e: Element) -> list:
@@ -89,6 +91,33 @@ def _parse_date(value: str, order: list) -> Optional[dict]:
         values["year"] = year
         return values
     return None
+
+
+def _re_digits(text: str) -> list[str]:
+    import re as _re
+    return _re.findall(r"\d+", text)
+
+
+def _looks_like_date(text: str) -> bool:
+    groups = _re_digits(text)
+    return len(groups) == 3 and any(len(g) == 4 for g in groups)
+
+
+def _date_order(shown: str) -> list:
+    """Field order of a date as the control shows it: a 4-digit group is the year; the other
+    two follow the user's short-date setting (day first, or month first)."""
+    groups = _re_digits(shown)
+    if len(groups) != 3:
+        return []
+    import ctypes as _ct
+    buffer = _ct.create_unicode_buffer(80)
+    _ct.windll.kernel32.GetLocaleInfoEx(None, 0x1F, buffer, 80)  # LOCALE_SSHORTDATE
+    pattern = buffer.value.lower()
+    month_first = pattern.find("m") < pattern.find("d") if "m" in pattern and "d" in pattern else False
+    small = ["month", "day"] if month_first else ["day", "month"]
+    if len(groups[0]) == 4:
+        return ["year", "month", "day"]
+    return small + ["year"]
 
 
 def _number(value: float) -> str:
@@ -212,7 +241,8 @@ class WindowsDriver:
         if prop(P.UIA_IsValuePatternAvailablePropertyId, False):
             e.patterns.add("value")
             e.readonly = bool(prop(P.UIA_ValueIsReadOnlyPropertyId, False))
-            if role in TYPABLE or role in ("slider", "progressbar", "link"):
+            if role in TYPABLE or role in ("slider", "progressbar", "link", "cell", "row", "custom", "listitem",
+                                           "treeitem"):
                 e.value = str(prop(P.UIA_ValueValuePropertyId) or "").rstrip("\r\n")
         if prop(P.UIA_IsTogglePatternAvailablePropertyId, False):
             e.patterns.add("toggle")
@@ -241,6 +271,15 @@ class WindowsDriver:
         if prop(P.UIA_IsSelectionPatternAvailablePropertyId, False) and \
                 prop(P.UIA_SelectionCanSelectMultiplePropertyId, False):
             e.patterns.add("multiselect")
+        # Older Win32 and WinForms controls only speak MSAA ("legacy accessibility"):
+        # their value is there even when no modern pattern offers it.
+        if e.value is None and prop(P.UIA_IsLegacyIAccessiblePatternAvailablePropertyId, False):
+            legacy = (prop(P.UIA_LegacyIAccessibleValuePropertyId) or "").strip()
+            if legacy and role in ("slider", "spinner", "pane", "custom", "dropdown", "input"):
+                e.value = legacy
+        if "DateTimePick" in e.class_name or (role == "pane" and e.value and _looks_like_date(e.value)):
+            role = e.role = "input"
+            e.patterns.add("date")
         if role == "switch" and "toggle" in e.patterns:
             state = prop(P.UIA_ToggleToggleStatePropertyId, 0)
             e.checked = {0: "off", 1: "on", 2: "mixed"}.get(state, "off")
@@ -256,13 +295,17 @@ class WindowsDriver:
             child = self._build(kids.GetElement(i), e, root_hwnd, budget)
             if child is not None:
                 e.children.append(child)
+        if role == "table":
+            from ..extract import normalize_table
+            normalize_table(e)
         if role == "dropdown" and e.enabled:
             editable = any(c.role == "input" for c in e.children)
             editable = editable or ("value" in e.patterns and not e.readonly and focusable
                                     and "expand" not in e.patterns)
             e.actions = (["select"] + (["type"] if editable and not e.readonly else [])
                          + [a for a in e.actions if a in ("expand", "collapse")])
-        if role == "list" and "multiselect" in e.patterns and e.enabled:
+        if role == "list" and e.enabled and ("multiselect" in e.patterns
+                                             or any("select" in c.patterns for c in e.children)):
             e.actions = ["select"] + [a for a in e.actions if a != "select"]  # value: "A | B | C"
         return e
 
@@ -277,8 +320,10 @@ class WindowsDriver:
             actions.append("type")
         if "toggle" in e.patterns and e.role in ("checkbox", "radio", "switch"):
             actions.append("toggle")
-        if "range" in e.patterns and not e.readonly and e.role != "progressbar":
+        if e.role == "slider" or ("range" in e.patterns and not e.readonly and e.role != "progressbar"):
             actions.append("set")
+        if "date" in e.patterns and "type" not in actions:
+            actions.append("type")
         if "select" in e.patterns:
             actions.append("select")
         if "expand" in e.patterns:
@@ -377,8 +422,56 @@ class WindowsDriver:
             return "uia.range"
         if e.handle is not None and "value" in e.patterns and self._pattern(
                 e, UIA.UIA_ValuePatternId, UIA.IUIAutomationValuePattern, lambda p: p.SetValue(_number(number))):
-            return "uia.value"
-        raise RuntimeError(f"{e.role} \"{e.title}\" cannot be set to a number")
+            if self._number_now(e) == number:
+                return "uia.value"
+        if e.role == "slider":
+            # Keyboard, as a person would: to the start, then one step at a time.
+            self._focus(e)
+            low = float(e.value_range[0]) if e.value_range else 0.0
+            win_input.press("home")
+            for _ in range(int(round(number - low))):
+                win_input.press("right")
+            if self._number_now(e) in (None, number):
+                return "keys"
+        raise RuntimeError(f"{e.role} \"{e.title}\" cannot be set to {_number(number)}")
+
+    def _number_now(self, e: Element) -> Optional[float]:
+        sources = ([UIA.UIA_RangeValueValuePropertyId] if "range" in e.patterns else []) + \
+                  ([UIA.UIA_ValueValuePropertyId] if "value" in e.patterns else []) + \
+                  [UIA.UIA_LegacyIAccessibleValuePropertyId]
+        for pid in sources:
+            try:
+                value = e.handle.GetCurrentPropertyValue(pid)
+                if value not in (None, ""):
+                    return float(value)
+            except Exception:
+                continue
+        return None
+
+    def _type_date(self, e: Element, value: str) -> str:
+        """A desktop date picker (Win32 SysDateTimePick32): type each field, move right between them."""
+        current = e.value or ""
+        order = _date_order(current)
+        numbers = _parse_date(value, [k for k in order if k != "year"] if order else ["day", "month"])
+        if numbers is None:
+            raise ValueError(f'"{value}" is not a date; write it as 2024-07-15 or 15/07/2024')
+        win_input.focus_window(e.root_hwnd)
+        l, t, r, b = e.box
+        win_input.click(l + 10, (t + b) // 2)  # clicking the left edge selects the first field
+        time.sleep(0.05)
+        for n, kind in enumerate(order or ["day", "month", "year"]):
+            win_input.type_text(str(numbers[kind]).zfill(4 if kind == "year" else 2))
+            if n < 2:
+                win_input.press("right")
+        time.sleep(0.1)
+        try:
+            shown = str(e.handle.GetCurrentPropertyValue(UIA.UIA_LegacyIAccessibleValuePropertyId) or "")
+        except Exception:
+            shown = ""
+        digits = lambda t: [int(x) for x in _re_digits(t)]
+        if shown and sorted(digits(shown)) != sorted([numbers["year"], numbers["month"], numbers["day"]]):
+            raise RuntimeError(f'the date picker shows "{shown}" after typing {value}')
+        return "keys"
 
     def _set_date(self, e: Element, parts: list, value: str) -> str:
         """Fill a date field made of day, month and year parts (browsers, many desktop pickers).
@@ -418,6 +511,8 @@ class WindowsDriver:
             if child.role == "listitem" and child.selected and child.name not in wanted and child.handle is not None:
                 self._pattern(child, UIA.UIA_SelectionItemPatternId, UIA.IUIAutomationSelectionItemPattern,
                               lambda p: p.RemoveFromSelection())
+        if e.framework in LEGACY_FRAMEWORKS:
+            return self._ctrl_click_options(e, wanted)
         for n, option in enumerate(wanted):
             condition = self._uia.CreateAndCondition(
                 self._uia.CreatePropertyCondition(UIA.UIA_ControlTypePropertyId, 50007),
@@ -428,7 +523,35 @@ class WindowsDriver:
             call = (lambda p: p.Select()) if n == 0 else (lambda p: p.AddToSelection())
             if not self._pattern(item, UIA.UIA_SelectionItemPatternId, UIA.IUIAutomationSelectionItemPattern, call):
                 raise RuntimeError(f'could not select "{option}" in list "{e.title}"')
-        return "uia.select"
+        if len(wanted) == 1 or sorted(self._selected_names(e)) == sorted(wanted):
+            return "uia.select"
+        # The list ignored "add to selection" (common in older controls): Ctrl+click instead.
+        return self._ctrl_click_options(e, wanted)
+
+    def _ctrl_click_options(self, e: Element, wanted: list[str]) -> str:
+        win_input.focus_window(e.root_hwnd)
+        for n, option in enumerate(wanted):
+            child = next((c for c in e.children if c.name == option), None)
+            if child is None:
+                raise RuntimeError(f'list "{e.title}" has no option "{option}"')
+            if child.offscreen:
+                self.scroll_into_view(child)
+            win_input.click(*child.center, hold="" if n == 0 else "ctrl")
+            time.sleep(0.05)
+        chosen = self._selected_names(e)
+        if sorted(chosen) != sorted(wanted):
+            raise RuntimeError(f'list "{e.title}" has {chosen} chosen, not {wanted}')
+        return "mouse"
+
+    def _selected_names(self, e: Element) -> list[str]:
+        names = []
+        for child in e.children:
+            try:
+                if child.handle.GetCurrentPropertyValue(UIA.UIA_SelectionItemIsSelectedPropertyId):
+                    names.append(child.name)
+            except Exception:
+                continue
+        return names
 
     def read_value(self, e: Element) -> Optional[str]:
         """The value a field holds right now, or None if it cannot be read."""
@@ -486,12 +609,33 @@ class WindowsDriver:
             return "keys"
         raise RuntimeError(f'could not select "{option}" in dropdown "{e.title}"')
 
+    def type_with_keys(self, e: Element, value: str) -> str:
+        """Type into a field with real keystrokes: focus, select all, delete, type."""
+        if e.source == "tree" and e.handle is not None:
+            self._focus(e)
+        else:
+            self._mouse_click(e)
+        win_input.press("ctrl+a")
+        win_input.press("delete")
+        if e.role != "document":
+            win_input.press("end")
+            win_input.press("shift+home")
+            win_input.press("delete")
+        win_input.type_text(value)
+        return "keys"
+
     def perform(self, e: Element, action: str, value: Optional[str] = None) -> str:
         if not e.enabled:
             raise RuntimeError(f"element [{e.index}] is disabled")
         tree_backed = e.source != "cv" and e.handle is not None
         if action == "type" and e.source == "merged" and "value" not in e.patterns:
             pass  # typed with real keys below
+
+        legacy = e.framework in LEGACY_FRAMEWORKS
+        if action in ("select", "click") and legacy and e.role in ("radio", "listitem", "tabitem", "treeitem"):
+            # WinForms and Win32 accept UIA selection calls without telling the program: the
+            # control looks changed but the application never hears of it. Click instead.
+            return self._mouse_click(e)
 
         if action == "click":
             # A control the tree could not even name often ignores UIA calls; click it for real.
@@ -529,6 +673,8 @@ class WindowsDriver:
             parts = _date_parts(e)
             if parts:
                 return self._set_date(e, parts, value or "")
+            if "date" in e.patterns:
+                return self._type_date(e, value or "")
 
         if action in ("type", "append"):
             text = value or ""
