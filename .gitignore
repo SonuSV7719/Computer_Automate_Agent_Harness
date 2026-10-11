@@ -10,3 +10,4 @@ dist/
 node_modules/
 .livetest/
 .livetest-brain.log
+demo/out/
