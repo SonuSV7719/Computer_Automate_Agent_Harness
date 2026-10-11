@@ -57,9 +57,11 @@ class BrainLink:
 
     # ---- Gemini through the brain (the LlmClient interface) -------------
     def json(self, system: str, user: str, schema: dict, files: Optional[list] = None) -> dict:
-        if files:
-            raise ValueError("file reading goes through the web harness, not the agent")
-        return self._request("POST", "/v1/llm", {"system": system, "user": user, "schema": schema}, timeout=120)
+        import base64
+        body = {"system": system, "user": user, "schema": schema}
+        if files:  # screenshots for the model
+            body["files"] = [{"mime": mime, "data": base64.b64encode(data).decode()} for mime, data in files]
+        return self._request("POST", "/v1/llm", body, timeout=120)
 
     # ---- reporting -----------------------------------------------------
     def push(self, kind: str, payload: dict) -> None:

@@ -93,6 +93,12 @@ def _parse_date(value: str, order: list) -> Optional[dict]:
     return None
 
 
+def _held(value: Optional[str]) -> str:
+    """Modifier keys named as the value of a click: "ctrl", "shift", "ctrl+shift"."""
+    keys = [k for k in (value or "").lower().replace(" ", "").split("+") if k]
+    return "+".join(keys) if keys and all(k in ("ctrl", "control", "shift", "alt", "win") for k in keys) else ""
+
+
 def _re_digits(text: str) -> list[str]:
     import re as _re
     return _re.findall(r"\d+", text)
@@ -405,6 +411,17 @@ class WindowsDriver:
         return self._pattern(e, UIA.UIA_ScrollItemPatternId, UIA.IUIAutomationScrollItemPattern,
                              lambda p: p.ScrollIntoView())
 
+    def drag_between(self, source: Element, target: Element) -> str:
+        """Drag one element and drop it on another: files onto folders, cards between lists."""
+        win_input.focus_window(source.root_hwnd)
+        for e in (source, target):
+            if e.offscreen:
+                self.scroll_into_view(e)
+        sx, sy = source.center
+        tx, ty = target.center
+        win_input.drag([(sx, sy), (sx + 8, sy + 8), (tx, ty)], steps=16)
+        return "mouse"
+
     def element_at(self, x: int, y: int) -> Optional[dict]:
         """What the application itself reports under a screen point (live hit-testing)."""
         from ctypes import wintypes
@@ -642,6 +659,9 @@ class WindowsDriver:
             # control looks changed but the application never hears of it. Click instead.
             return self._mouse_click(e)
 
+        if action == "click" and _held(value):
+            return self._mouse_click(e, hold=_held(value))  # Ctrl/Shift/Alt+click: only a real click carries keys
+
         if action == "click":
             # A control the tree could not even name often ignores UIA calls; click it for real.
             if tree_backed and e.source == "tree":
@@ -672,7 +692,21 @@ class WindowsDriver:
 
         if action in ("doubleclick", "rightclick"):
             return self._mouse_click(e, double=action == "doubleclick",
-                                     button="right" if action == "rightclick" else "left")
+                                     button="right" if action == "rightclick" else "left", hold=_held(value))
+
+        if action == "tripleclick":  # selects a whole line or paragraph
+            win_input.focus_window(e.root_hwnd)
+            for _ in range(3):
+                win_input.click(*e.center)
+            return "mouse"
+
+        if action == "hover":
+            win_input.focus_window(e.root_hwnd)
+            if e.offscreen:
+                self.scroll_into_view(e)
+            win_input.hover(*e.center)
+            time.sleep(0.3)  # menus and tooltips open after a short rest
+            return "mouse"
 
         if action == "type" and tree_backed:
             parts = _date_parts(e)

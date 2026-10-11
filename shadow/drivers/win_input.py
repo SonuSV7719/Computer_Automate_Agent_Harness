@@ -123,6 +123,16 @@ def click(x: int, y: int, button: str = "left", double: bool = False, hold: str 
         _send(*[_key(vk=c, flags=KEYEVENTF_KEYUP) for c in reversed(held)])
 
 
+def hover(x: int, y: int) -> None:
+    """Rest the pointer on a point, so menus open and tooltips appear."""
+    MOUSEEVENTF_MOVE = 0x0001
+    user32.SetCursorPos(int(x) - 3, int(y) - 3)
+    _send(_mouse(MOUSEEVENTF_MOVE))
+    time.sleep(0.03)
+    user32.SetCursorPos(int(x), int(y))
+    _send(_mouse(MOUSEEVENTF_MOVE))
+
+
 def drag(points: list[tuple[int, int]], steps: int = 12) -> None:
     """Press at the first point, move through the others, release at the last."""
     MOUSEEVENTF_MOVE = 0x0001

@@ -62,6 +62,16 @@ On a whiteboard such as Excalidraw: click a tool in the toolbar, `drag` on the r
 the shape, `shadow key enter` then `shadow text "Label"` then `shadow key esc` to label it.
 The label then appears inside the region as text you can click by its index.
 
+To draw a whole diagram in one go: `shadow draw "architecture of a ride-sharing app"` (Gemini
+plans boxes and arrows), or `shadow draw --spec diagram.json` with
+`{"nodes": [{"id": "api", "label": "API", "col": 0, "row": 0}, ...], "edges": [{"from": "api", "to": "db"}]}`.
+It draws with the board's Rectangle and Arrow tools and reports which labels it can read back.
+
+Other human actions: `hover` (menus that open on hover), `tripleclick` (select a line),
+`drag_to <target index>` (drag one element onto another), and `click ctrl` / `click shift`
+(click while holding a key). `shadow table` and `shadow items` read tables and repeated items
+such as product cards, following `--next "Next"` pages or `--scroll`.
+
 ## Always state the expected result
 
 Give `--expect` on every action that saves, submits or navigates. The command waits for it and

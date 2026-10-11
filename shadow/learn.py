@@ -115,7 +115,13 @@ def learn(call: Callable, client: LlmClient, goal: str, max_steps: int = MAX_STE
     try:
         for _ in range(max_steps):
             snap = call(lambda e: e.see())
-            step = planner.plan_step(client, goal, snap.text, history)
+            image = None
+            if call(lambda e: e.wants_image(snap)):
+                try:
+                    image = call(lambda e: e.screen_image(snap))
+                except Exception:
+                    image = None  # the text alone still works
+            step = planner.plan_step(client, goal, snap.text, history, image)
             llm_calls += 1
 
             if step.get("done") or step.get("action") == "done":

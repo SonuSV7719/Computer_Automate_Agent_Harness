@@ -115,6 +115,34 @@ def data_items(index: Optional[int] = Body(None), snapshot: Optional[int] = Body
     return run(lambda e: e.extract_items(index, snapshot, next, scroll, max_pages))
 
 
+@app.post("/draw")
+def draw_diagram(description: str = Body(""), spec: Optional[dict] = Body(None), tools: dict = Body(default_factory=dict),
+                 command: Optional[str] = Body(None)) -> dict:
+    """Draw a diagram on the target whiteboard. Gemini plans it from a description, or a
+    spec (boxes on a grid and arrows) is given directly."""
+    from . import draw
+    try:
+        if spec is None:
+            client = _llm()
+            if client is None:
+                return {"ok": False, "kind": "invalid", "error": "no Gemini access to plan the diagram; pass a spec"}
+            if not description.strip():
+                return {"ok": False, "kind": "invalid", "error": "describe the diagram, or pass a spec"}
+            spec = draw.plan_diagram(client, description)
+        _get_engine().resume()
+
+        def on_event(event: dict) -> None:
+            if command:
+                _report("event", {"id": command, "event": event})
+
+        result = _worker.submit(lambda: draw.draw(_get_engine(), spec, tools or None, on_event)).result()
+        return {"ok": result["ok"], "spec": spec, **{k: v for k, v in result.items() if k != "ok"},
+                **({} if result["ok"] else {"kind": "error",
+                                             "error": f"labels not seen on the canvas: {', '.join(result['labels_missing'])}"})}
+    except (LookupError, ValueError, RuntimeError) as exc:
+        return {"ok": False, "kind": "invalid", "error": str(exc)}
+
+
 @app.post("/record")
 def record(cmd: str = Body(..., embed=True)) -> dict:
     def fn(e):
@@ -392,6 +420,8 @@ def _handle_command(command: dict) -> dict:
     if kind == "items":
         return data_items(args.get("index"), None, args.get("next"), bool(args.get("scroll")),
                           int(args.get("max_pages", 50)))
+    if kind == "draw":
+        return draw_diagram(args.get("description", ""), args.get("spec"), args.get("tools") or {}, command["id"])
     if kind == "demo_app":
         return demo_app(args.get("variant", "v1"))
     return {"ok": False, "kind": "invalid", "error": f"unknown command type '{kind}'"}
@@ -442,7 +472,17 @@ def _connect() -> None:
         _link = BrainLink(device["url"], device["token"], device.get("device_id", ""))
         _link.start(_handle_command)
     client = default_client() or _link
-    MANAGER.llm_healer = (lambda packet: planner.heal(client, packet)) if client is not None else None
+
+    def healer(packet: dict) -> dict:
+        image = None
+        try:
+            if _engine_call(lambda e: e.wants_image()):
+                image = _engine_call(lambda e: e.screen_image())
+        except Exception:
+            image = None
+        return planner.heal(client, packet, image)
+
+    MANAGER.llm_healer = healer if client is not None else None
 
     def finished(summary: dict) -> None:
         _report("run", {**summary, "kind": "run"})

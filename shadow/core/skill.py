@@ -85,6 +85,14 @@ def compile_trace(trace: list[dict], name: str, description: str = "") -> Skill:
                 el_id = _unique(f"{PREFIX.get(fp['role'], 'el')}_{slug(title)}", skill.locators)
                 skill.locators[el_id] = {"fingerprint": fp, "intent": step["intent"]}
             step["el"] = el_id
+        if raw.get("target"):  # drag_to: the drop target is an element of its own
+            target = raw["target"]
+            to_id = next((k for k, v in skill.locators.items() if _same_element(v["fingerprint"], target)), None)
+            if to_id is None:
+                to_title = target.get("name") or target.get("label") or target.get("automation_id") or target["role"]
+                to_id = _unique(f"{PREFIX.get(target['role'], 'el')}_{slug(to_title)}", skill.locators)
+                skill.locators[to_id] = {"fingerprint": target, "intent": step["intent"]}
+            step["to"] = to_id
         value = raw.get("value")
         if value is not None:
             if raw["action"] in VALUE_ACTIONS and fp:
@@ -137,6 +145,8 @@ def render_code(skill: Skill) -> str:
             continue
         if "el" in step:
             call_args.append(f'el("{step["el"]}")')
+        if "to" in step:
+            call_args.append(f'el("{step["to"]}")')
         if "param" in step:
             call_args.append(step["param"])
         elif "value" in step:

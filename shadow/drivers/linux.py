@@ -109,6 +109,11 @@ class LinuxDriver:
         x, y = e.center
         if action == "click" or action in ("toggle", "select", "focus", "expand", "collapse"):
             self._click(x, y)
+        elif action == "hover":
+            _run("xdotool", "mousemove", "--sync", str(x), str(y))
+            time.sleep(0.3)
+        elif action == "tripleclick":
+            self._click(x, y, repeat=3)
         elif action == "doubleclick":
             self._click(x, y, repeat=2)
         elif action == "rightclick":
@@ -142,6 +147,18 @@ class LinuxDriver:
         else:
             raise ValueError(f"unknown action: {action}")
         return "mouse" if action not in ("type", "append") else "keys"
+
+    def drag_between(self, source: Element, target: Element) -> str:
+        self._focus(source.root_hwnd)
+        sx, sy = source.center
+        tx, ty = target.center
+        _run("xdotool", "mousemove", "--sync", str(sx), str(sy))
+        _run("xdotool", "mousedown", "1")
+        _run("xdotool", "mousemove", "--sync", str(sx + 8), str(sy + 8))
+        _run("xdotool", "mousemove", "--sync", str(tx), str(ty))
+        time.sleep(0.05)
+        _run("xdotool", "mouseup", "1")
+        return "mouse"
 
     def press(self, combo: str, hwnd: int = 0) -> None:
         self._focus(hwnd)

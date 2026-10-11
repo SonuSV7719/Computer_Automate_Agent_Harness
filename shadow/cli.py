@@ -192,7 +192,8 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("act", help="perform an action on an element")
     a.add_argument("index", type=int)
-    a.add_argument("action", choices=["click", "doubleclick", "rightclick", "type", "append", "toggle",
+    a.add_argument("action", choices=["click", "doubleclick", "rightclick", "tripleclick", "hover", "drag_to",
+                                      "type", "append", "toggle",
                                       "select", "expand", "collapse", "focus", "scroll", "click_at", "drag",
                                       "set"])
     a.add_argument("value", nargs="?")
@@ -258,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
         dp.add_argument("--max-pages", type=int, default=50)
         dp.add_argument("--csv", help="also write the data to this CSV file")
         dp.add_argument("--snapshot", type=int)
+
+    dr = sub.add_parser("draw", help="draw a diagram (boxes and arrows) on the target whiteboard")
+    dr.add_argument("description", nargs="?", default="", help="what to draw; Gemini plans the layout")
+    dr.add_argument("--spec", help="a JSON file with nodes (id, label, col, row) and edges (from, to) instead")
+    dr.add_argument("--box-tool", default="Rectangle", help="name of the board's rectangle tool")
+    dr.add_argument("--arrow-tool", default="Arrow", help="name of the board's arrow tool")
 
     sub.add_parser("status", help="daemon, pairing and Gemini status")
     sub.add_parser("stop", help="kill switch: stop touching the desktop now (also Ctrl+Alt+F12)")
@@ -389,6 +396,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.csv:
             _write_csv(args.csv, reply, args.cmd)
         return _finish(reply, as_json, _table_text(reply) if args.cmd == "table" else _items_text(reply))
+
+    if args.cmd == "draw":
+        spec = json.loads(Path(args.spec).read_text(encoding="utf-8")) if args.spec else None
+        reply = call("/draw", {"description": args.description, "spec": spec,
+                               "tools": {"box": args.box_tool, "arrow": args.arrow_tool}})
+        if "boxes" not in reply:
+            return _finish(reply, as_json, "")
+        text = (f"drew {reply['boxes']} boxes and {reply['arrows']} arrows with {reply['actions']} actions "
+                f"in {reply['ms']} ms\nlabels on the canvas: {len(reply['labels_found'])} of {reply['boxes']}"
+                + (f"\nnot seen: {', '.join(reply['labels_missing'])}" if reply["labels_missing"] else ""))
+        return _finish(reply, as_json, text)
 
     if args.cmd in ("stop", "resume"):
         reply = call("/" + args.cmd)

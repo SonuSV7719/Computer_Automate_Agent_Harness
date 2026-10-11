@@ -37,6 +37,17 @@ def run(h, invoice_no='INV-1042', vendor='Contoso Supplies', amount='1200'):
     h.click(el("btn_save"), expect=f'text:Saved {invoice_no}')
 ```
 
+## What it can operate and read
+
+- **Every common form control, on the web and on the desktop:** text, password, email, number, date, multi-line text, dropdowns (fixed and editable), multi-select lists (`select "English | Tamil"`), radio buttons, checkboxes, sliders and number spinners (`set 70`), switches, tabs. Older WinForms and Win32 controls that only speak MSAA are handled with real clicks and typing, because they accept automation calls without telling the program.
+- **Tables:** HTML tables, desktop data grids (WinForms DataGridView), and details-view lists (Explorer-style). `shadow table` returns columns and rows, following `--next "Next"` across pages or `--scroll` for growing lists, and writes `--csv`.
+- **Repeated items:** product cards, search results, tiles, card panels on the desktop. `shadow items` returns one record per item with title, link, price, other prices, rating, review count, image and buttons, across pages and infinite scroll.
+- **Human actions:** click (with Ctrl, Shift or Alt held), double and triple click, right click, hover, drag one element onto another, drag and click at positions on a canvas, type, keys, scroll. Elements below the fold are scrolled into view first.
+- **Whiteboards:** `shadow draw "architecture of a ride-sharing app"` has Gemini plan boxes and arrows, draws them with the board's own Rectangle and Arrow tools, and checks every label on the canvas afterwards.
+- **Screen context for the model:** besides the indexed screen text, Gemini gets a screenshot of the window with every element boxed and numbered, whenever part of the window is read from pixels (or always, with `SHADOW_SCREENSHOTS=always`).
+
+Measured with the extraction commands: the test page's 23-row orders table across 3 pages in 3.4 s, 18 product cards across 3 pages in 3.7 s, a 40-entry infinite-scroll feed in 24 s; on the desktop app a 23-row data grid across 3 pages in 0.5 s, a 30-row file list in 0.4 s, 14 product card panels across 3 pages in 1.7 s; on books.toscrape.com, 60 books across 3 pages in 21 s (most of it waiting for the pages to load).
+
 ## Measured on this project's test apps
 
 All figures are from the live test scripts in `tests/live/`, on a 12-core Windows 11 laptop at 125% display scaling.
@@ -172,7 +183,7 @@ How each required technology is used:
 ## Testing
 
 ```
-pytest                                  # 75 tests, any OS, no desktop needed
+pytest                                  # 103 tests, any OS, no desktop needed
 bash tests/live/run_live.sh             # real WinForms app: record, replay, UI change, heal, exception
 bash tests/live/run_live_cv.sh          # real Tk app with no element names: the vision path end to end
 bash tests/live/run_live_stack.sh       # web request -> brain -> paired agent -> real app

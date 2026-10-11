@@ -287,9 +287,19 @@ class Engine:
                 raise ValueError(f"action '{action}' needs an element index")
             element = before.get(index)
             fp = fingerprint.make(element, before)
+            target_fp = None
             if action in ("click_at", "drag"):
                 _check_uncovered(before, element, value, self.driver)
-            route = self.driver.perform(element, action, value)
+            if action == "drag_to":
+                # The drop target is another element of the same snapshot, given by its index.
+                try:
+                    target = before.get(int(value or ""))
+                except ValueError:
+                    raise ValueError("drag_to needs the index of the element to drop onto") from None
+                target_fp = fingerprint.make(target, before)
+                route = self.driver.drag_between(element, target)
+            else:
+                route = self.driver.perform(element, action, value)
             if route != "uia.parts":  # a date set part by part is shown in the field's own format
                 try:
                     self._verify_value(element, action, value)
@@ -308,11 +318,15 @@ class Engine:
         ms = (time.perf_counter() - started) * 1000
         ok = met is not False
         secret = element is not None and element.masked
+        if action == "drag_to":
+            value = None  # an index means nothing on the next run; the target's fingerprint does
         step = {
             # A password is never written to a trace or a skill; it is asked for at run time.
             "action": action, "value": "" if secret else value, "fingerprint": fp, "expect": expect,
             "intent": intent, "route": route, "ok": ok, "ms": round(ms, 1),
         }
+        if action == "drag_to":
+            step["target"] = target_fp
         if self.recording and ok:
             self.trace.append(step)
         return {
@@ -352,6 +366,48 @@ class Engine:
             if time.perf_counter() >= deadline:
                 raise RuntimeError(f'the field shows "{shown}" after {action} "{value}"')
             time.sleep(0.05)
+
+    # ---- the screen as a picture -------------------------------------
+    def wants_image(self, snap: Optional[Snapshot] = None) -> bool:
+        """Should the model also get a screenshot? Set by SHADOW_SCREENSHOTS: "always", "never",
+        or "auto" (default): when part of the window was read from pixels, such as a canvas,
+        a whiteboard or a remote desktop, where text alone cannot convey the layout."""
+        mode = os.environ.get("SHADOW_SCREENSHOTS", "auto").lower()
+        if mode in ("always", "never"):
+            return mode == "always"
+        snap = snap or self.snapshot
+        return bool(snap) and any(e.role == "region" or e.source == "cv" for e in snap.elements)
+
+    def screen_image(self, snap: Optional[Snapshot] = None, marks: bool = True, max_side: int = 1400) -> bytes:
+        """A PNG of the target window with each indexed element boxed and numbered, so the
+        picture and the screen text refer to the same [index]."""
+        import io
+
+        from PIL import Image, ImageDraw
+
+        snap = snap or self.snapshot or self.see()
+        box = snap.window.box
+        grab = getattr(self.driver, "capture_window", None)
+        image = (grab(snap.window.hwnd, box) if grab else self.driver.capture(box)).convert("RGB")
+        if marks:
+            draw = ImageDraw.Draw(image)
+            ox, oy = box[0], box[1]
+            for e in snap.elements:
+                if e.offscreen or e.area <= 0 or e.role in ("window", "dialog"):
+                    continue
+                l, t, r, b = (e.box[0] - ox, e.box[1] - oy, e.box[2] - ox, e.box[3] - oy)
+                colour = (230, 60, 30) if e.source == "cv" else (20, 110, 230)
+                draw.rectangle([l, t, r, b], outline=colour, width=2)
+                label = str(e.index)
+                tw = 7 * len(label) + 4
+                draw.rectangle([l, max(0, t - 13), l + tw, max(13, t)], fill=colour)
+                draw.text((l + 2, max(0, t - 13)), label, fill=(255, 255, 255))
+        scale = max_side / max(image.size)
+        if scale < 1:
+            image = image.resize((int(image.width * scale), int(image.height * scale)))
+        out = io.BytesIO()
+        image.save(out, "PNG", optimize=True)
+        return out.getvalue()
 
     # ---- structured data ----------------------------------------------
     def _target(self, index: Optional[int], snapshot_id: Optional[int]) -> tuple[Snapshot, Optional[Element]]:

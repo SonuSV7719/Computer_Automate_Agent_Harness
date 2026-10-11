@@ -9,7 +9,8 @@ import json
 
 from .client import LlmClient
 
-ACTIONS = ["click", "doubleclick", "rightclick", "type", "append", "select", "toggle", "expand",
+ACTIONS = ["click", "doubleclick", "rightclick", "tripleclick", "hover", "drag_to", "type", "append", "select",
+           "toggle", "expand",
            "collapse", "scroll", "click_at", "drag", "set", "key", "text"]
 
 SCREEN_FORMAT = """\
@@ -37,7 +38,10 @@ Reply with exactly one next action as JSON. Every reply must have "action".
 - "action": what to do. Choose one the element lists under "actions". "type" replaces the
   field's content, "append" adds to it, "select" chooses a dropdown option or list item (put
   the option text in "value"; for a list marked "several allowed" give options as "A | B").
-  "set" moves a slider or number spinner to a number. "key" presses a key or combination such as "enter" or "ctrl+s"
+  "set" moves a slider or number spinner to a number. "hover" rests the pointer on an element
+  (menus that open on hover, tooltips). "drag_to" drags the element onto another one: give the
+  other element's index as "value". For "click", a "value" of "ctrl", "shift" or "alt" holds
+  that key while clicking. "key" presses a key or combination such as "enter" or "ctrl+s"
   and needs no index. Use "done" when the goal is fully achieved or cannot be achieved.
 - "index": the element to act on. Use only an index that appears on the current screen.
 - "value": the text to type, the option to select, or the key to press.
@@ -124,15 +128,22 @@ EXTRACT_SCHEMA = {
 }
 
 
-def plan_step(client: LlmClient, goal: str, screen: str, history: list[dict]) -> dict:
-    """Ask for the next action towards the goal."""
+IMAGE_NOTE = ("\n\nA screenshot of the window is attached. Every element in the screen text is boxed in "
+              "it with its [index] number (blue: read from the application, red: read from pixels). "
+              "Use it to see layout, colours, drawings and anything the text cannot describe.")
+
+
+def plan_step(client: LlmClient, goal: str, screen: str, history: list[dict], image: bytes | None = None) -> dict:
+    """Ask for the next action towards the goal, with a marked screenshot when given."""
     done = "\n".join(
         f"{n + 1}. {h['summary']} -> {h['outcome']}" for n, h in enumerate(history)) or "(nothing yet)"
     user = f"GOAL\n{goal}\n\nSTEPS SO FAR\n{done}\n\nCURRENT SCREEN\n{screen}"
+    if image:
+        return client.json(LEARN_SYSTEM + IMAGE_NOTE, user, LEARN_SCHEMA, [("image/png", image)])
     return client.json(LEARN_SYSTEM, user, LEARN_SCHEMA)
 
 
-def heal(client: LlmClient, packet: dict) -> dict:
+def heal(client: LlmClient, packet: dict, image: bytes | None = None) -> dict:
     """Ask how to repair a failed step. The reply is validated by the runner before use."""
     user = (
         f"STEP {packet['step'] + 1} OF SKILL \"{packet['skill']}\"\n"
@@ -144,7 +155,10 @@ def heal(client: LlmClient, packet: dict) -> dict:
         f"FAILURE ({packet['failure']}, attempt {packet.get('attempt', 1)})\n{packet['detail']}\n\n"
         f"CURRENT SCREEN\n{packet['screen']}"
     )
-    decision = client.json(HEAL_SYSTEM, user, HEAL_SCHEMA)
+    if image:
+        decision = client.json(HEAL_SYSTEM + IMAGE_NOTE, user, HEAL_SCHEMA, [("image/png", image)])
+    else:
+        decision = client.json(HEAL_SYSTEM, user, HEAL_SCHEMA)
     decision["llm"] = True
     return decision
 

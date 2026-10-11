@@ -31,7 +31,7 @@ PAIR_CODE_TTL = 600
 SANDBOX_ID = "sandbox"
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no look-alike characters
 USER_COMMANDS = {"windows", "target", "see", "act", "learn", "run", "heal", "skills", "skill",
-                 "rollback", "extract", "runs", "demo_app", "table", "items"}
+                 "rollback", "extract", "runs", "demo_app", "table", "items", "draw"}
 MAX_UPLOAD = 8 * 1024 * 1024
 
 
@@ -219,10 +219,16 @@ def create_app(store: Optional[Store] = None, llm=None, auth_mode: Optional[str]
 
     @app.post("/v1/llm")
     def llm_proxy(system: str = Body(...), user_text: str = Body(..., alias="user"), schema: dict = Body(...),
-                  dev: dict = Depends(device)) -> dict:
+                  files: list = Body(default_factory=list), dev: dict = Depends(device)) -> dict:
         """Gemini for a paired agent: the learn and heal prompts are built on the agent."""
+        attached = []
+        for item in files[:4]:
+            data = base64.b64decode(item.get("data", ""))
+            if len(data) > MAX_UPLOAD or not str(item.get("mime", "")).startswith("image/"):
+                raise HTTPException(413, "attach at most four images of up to 8 MB each")
+            attached.append((item["mime"], data))
         try:
-            reply = gemini().json(system, user_text, schema)
+            reply = gemini().json(system, user_text, schema, attached or None)
         except RuntimeError as exc:
             raise HTTPException(502, str(exc)) from None
         store.add("llm_calls", {"device_id": dev["id"], "uid": dev["uid"], "at": time.time(),

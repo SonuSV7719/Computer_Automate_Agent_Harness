@@ -16,9 +16,10 @@ from .core.skill import Skill, apply_patches
 from .engine import Halted
 from .skill_api import ElRef
 
-ELEMENT_ACTIONS = ("click", "doubleclick", "rightclick", "type", "append", "select", "toggle",
-                   "expand", "collapse", "focus", "scroll", "click_at", "drag", "set")
-ALWAYS_ALLOWED = {"click", "doubleclick", "rightclick", "focus", "scroll", "click_at", "drag"}
+ELEMENT_ACTIONS = ("click", "doubleclick", "rightclick", "tripleclick", "hover", "type", "append", "select",
+                   "toggle", "expand", "collapse", "focus", "scroll", "click_at", "drag", "set")
+ALWAYS_ALLOWED = {"click", "doubleclick", "rightclick", "tripleclick", "hover", "focus", "scroll", "click_at",
+                  "drag", "drag_to"}
 LOCATE_TIMEOUT = 1.5
 POLL = 0.05
 
@@ -66,6 +67,35 @@ class Runner:
 
     def text(self, value: str, expect: Optional[str] = None, timeout: float = 3.0, irreversible: bool = False):
         self._step("text", None, value, expect, timeout, irreversible)
+
+    def drag_to(self, ref: ElRef, to: ElRef, expect: Optional[str] = None, timeout: float = 3.0,
+                irreversible: bool = False):
+        """Drag one element onto another; both are found by their fingerprints on this run."""
+        n = self._n
+        self._n += 1
+        started = time.perf_counter()
+        source_fp = self.locators[ref.id]["fingerprint"]
+        target_fp = self.locators[to.id]["fingerprint"]
+
+        def run(e):
+            snap = e.see(self.cv)
+            source, how = fingerprint.resolve(source_fp, snap)
+            target, _ = fingerprint.resolve(target_fp, snap)
+            if source is None or target is None:
+                missing = ref.id if source is None else to.id
+                raise NeedsHuman(f"step {n + 1} failed: element {missing} not found on screen",
+                                 {"step": n, "failure": "locator", "screen": snap.text})
+            result = e.act("drag_to", index=source.index, value=str(target.index), snapshot_id=snap.id,
+                           expect=expect, timeout=timeout, settle=False, cv=self.cv)
+            if not result["ok"]:
+                raise NeedsHuman(f"step {n + 1} failed: expected result not seen: {expect}",
+                                 {"step": n, "failure": "expect", "screen": e.snapshot.text})
+            return how, result["route"]
+
+        how, route = self.call(run)
+        self._emit({"type": "step", "step": n, "action": "drag_to", "el": ref.id, "ms":
+                    round((time.perf_counter() - started) * 1000, 1), "locator": how, "route": route,
+                    "healed": False})
 
     def extract_table(self, ref: Optional[ElRef] = None, options: Optional[str] = None, **_ignored):
         return self._extract("extract_table", ref, options)
