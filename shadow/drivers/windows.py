@@ -150,7 +150,7 @@ class WindowsDriver:
         # Pattern calls such as Invoke can block while the app shows a modal dialog,
         # so they run on their own threads with a timeout.
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="uia-act", initializer=_com_init)
-        self._woken: set[int] = set()
+        self._woken: dict[int, float] = {}  # window -> when its page tree was last requested
 
     # ---- windows -------------------------------------------------------
     def list_windows(self) -> list[WindowInfo]:
@@ -168,14 +168,19 @@ class WindowsDriver:
     # ---- tree ----------------------------------------------------------
     def tree(self, hwnd: int) -> list[Element]:
         roots = self._tree(hwnd)
-        if hwnd not in self._woken and win_input.window_info(hwnd).class_name.startswith("Chrome_WidgetWin"):
-            self._woken.add(hwnd)
-            if win_input.wake_accessibility(hwnd) and not _has_web_content(roots):
-                for _ in range(10):  # the page's tree arrives a moment after the request
-                    time.sleep(0.2)
-                    roots = self._tree(hwnd)
-                    if _has_web_content(roots):
-                        break
+        if not _has_web_content(roots) and win_input.window_info(hwnd).class_name.startswith("Chrome_WidgetWin"):
+            # Chromium builds a page's tree only while it believes an assistive tool is
+            # listening, and forgets again after a navigation: ask again whenever the page
+            # comes back empty (at most once a second per window).
+            now = time.monotonic()
+            if now - self._woken.get(hwnd, 0.0) >= 1.0:
+                self._woken[hwnd] = now
+                if win_input.wake_accessibility(hwnd):
+                    for _ in range(10):  # the page's tree arrives a moment after the request
+                        time.sleep(0.2)
+                        roots = self._tree(hwnd)
+                        if _has_web_content(roots):
+                            break
         return roots
 
     def _tree(self, hwnd: int) -> list[Element]:

@@ -250,6 +250,10 @@ def read_item(item: Element) -> dict:
     texts = [t for t in texts if _meaningful(t) and not (t in seen or seen.add(t))]
     record: dict = {}
     title = next((h for h in headings), None) or next((name for name, _ in links if len(name) > 3), None)
+    if title and title.rstrip().endswith(("...", "…")):
+        stem = title.rstrip(" .…").casefold()
+        fuller = next((i for i in images if i.casefold().startswith(stem) and len(i) > len(stem)), None)
+        title = fuller or title  # sites cut long names; the picture's description often has it whole
     if not title and item.name and not _is_detail(item.name):
         title = item.name  # the card's own accessible name
     if not title:
@@ -310,16 +314,20 @@ def find_control(snapshot: Snapshot, name: str) -> Optional[Element]:
     wanted = name.strip()
     kinds = ("button", "link", "listitem", "menuitem", "tabitem", "text")
     pool = [e for root in snapshot.roots for e in root.walk() if e.role in kinds and (e.name or e.label)]
-    exact = [e for e in pool if textmatch.same(e.title, wanted)]
+    # Real controls first: "next" is often both a list entry and the link inside it, and
+    # only the link does anything when clicked.
+    rank = {"button": 0, "link": 0, "menuitem": 1, "tabitem": 1, "listitem": 2, "text": 3}
+    order = lambda e: (rank.get(e.role, 4), 0 if e.actions else 1)
+    exact = sorted((e for e in pool if textmatch.same(e.title, wanted)), key=order)
     if exact:
         return exact[0]
-    starts = [e for e in pool if e.title.casefold().startswith(wanted.casefold())]
+    starts = sorted((e for e in pool if e.title.casefold().startswith(wanted.casefold())), key=order)
     return starts[0] if starts else None
 
 
 def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_name: Optional[str] = None,
             scroll: Optional[Callable[[Snapshot], Optional[int]]] = None, max_pages: int = 50,
-            max_scrolls: int = 40, wait: float = 8.0, cv: Optional[bool] = None) -> dict:
+            max_scrolls: int = 40, wait: float = 20.0, cv: Optional[bool] = None) -> dict:
     """Read records page after page and/or scroll after scroll, without duplicates.
 
     `read(snapshot)` returns this page's records (None if the data is gone). `scroll`
@@ -369,6 +377,12 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
             stopped = "page limit" if next_name else stopped
             break
         control = find_control(snap, next_name)
+        for _ in range(3):  # a page that has just loaded may still be adding its paging links
+            if control is not None:
+                break
+            time.sleep(0.7)
+            snap = call(look)
+            control = find_control(snap, next_name)
         if control is not None and control.index < 0 and control.enabled:
             # Out of view (below the fold, inside a scrolled panel): scroll to it first.
             call(lambda e, c=control: e.reveal(c))
@@ -381,17 +395,30 @@ def collect(call: Callable, read: Callable[[Snapshot], Optional[list]], next_nam
             stopped = f'the "{next_name}" control could not be brought into view'
             break
         before = [_key(r) for r in (read(snap) or [])]
+        clicked = time.perf_counter()
         call(lambda e, i=control.index, s=snap.id: e.act("click", index=i, snapshot_id=s, settle=False))
         snap = _wait_for_change(call, read, before, wait, look=look)
         batch = read(snap)
         if batch is None or [_key(r) for r in batch] == before:
-            stopped = "the next page did not change the data"
+            stopped = (f"the data did not change within {round(time.perf_counter() - clicked, 1)} s of "
+                       f'clicking "{next_name}"' + (" (the page was still loading)" if _loading(snap) else ""))
             break
         pages += 1
         if not add(batch):
             stopped = "the next page brought nothing new"
             break
     return {"records": records, "pages": pages, "scrolls": scrolls, "stopped": stopped}
+
+
+def _loading(snap: Snapshot) -> bool:
+    """A browser shows a Stop button in place of Reload while a page is loading."""
+    for root in snap.roots:
+        for e in root.walk():
+            if e.role == "document":
+                continue
+            if e.role == "button" and e.name.casefold().startswith(("stop", "stop loading")):
+                return True
+    return False
 
 
 def _wait_for_change(call, read, before: list, wait: float, look=None) -> Snapshot:
@@ -403,9 +430,10 @@ def _wait_for_change(call, read, before: list, wait: float, look=None) -> Snapsh
     while True:
         snap = call(look)
         now = [_key(r) for r in (read(snap) or [])]
-        changed = now != before
-        if changed and now == previous:
-            return snap  # changed, and the same on two reads in a row
+        # No data at all means the next page is still loading, not that it is empty.
+        changed = now != before and bool(now)
+        if changed and now == previous and not _loading(snap):
+            return snap  # changed, finished loading, and the same on two reads in a row
         if time.perf_counter() >= deadline:
             return snap
         previous = now if changed else None

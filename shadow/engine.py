@@ -416,6 +416,12 @@ class Engine:
             table, _how = fingerprint.resolve(fp, snap)
         if table is None:
             tables = extract.find_tables(snap.roots)
+            for _ in range(5):  # a page that has just opened may not have built its content yet
+                if tables:
+                    break
+                time.sleep(0.6)
+                snap = self.see()
+                tables = extract.find_tables(snap.roots)
             if not tables:
                 raise LookupError("no table on screen")
             table = tables[0]
@@ -456,6 +462,12 @@ class Engine:
         if container is None and fp is not None:
             container, _how = fingerprint.resolve(fp, snap)
         groups = extract.find_item_groups(snap.roots)
+        for _ in range(4):  # a page that has just opened may not have built its content yet
+            if groups or container is not None:
+                break
+            time.sleep(0.6)
+            snap = self.see()
+            groups = extract.find_item_groups(snap.roots)
         min_fields = 2
         if container is not None:
             group = [g for g in groups if g[0] is container]
